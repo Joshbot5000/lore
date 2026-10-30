@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Lore</title>
+<meta name="description" content="The official history of your friend group.">
+<meta name="theme-color" content="#110c19">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lore">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Pirata+One&family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap">
+<style>
+/* Layout: one phone-shaped app. Full-bleed on phones; on desktop the phone sits beside a short pitch.
+   Look: a night-time codex. Plum-black ground, blackletter for names of things, holographic foil only on what is legendary. */
+:root{
+  --ground:#110c19;
+  --surface:#1a1326;
+  --raised:#241b34;
+  --line:#372b4c;
+  --ink:#f4efff;
+  --muted:#a99dc2;
+  --faint:#72678c;
+  --gold:#ffc46b;
+  --rose:#ff6fb5;
+  --cyan:#7ae8ff;
+  --lime:#b9ff8f;
+  --canon:#6ef0b0;
+  --contested:#ffc46b;
+  --noncanon:#ff6b85;
+  --scrim:rgba(10,6,16,.86);
+  --f-display:"Pirata One","UnifrakturCook","Old English Text MT",Georgia,serif;
+  --f-body:"Schibsted Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"DM Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  color-scheme:dark;
+}
+@property --a{syntax:"<angle>";inherits:false;initial-value:0deg}
+@keyframes spin{to{--a:360deg}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes rise{from{transform:translateY(10px);opacity:.0}to{transform:none;opacity:1}}
+@keyframes fillbar{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes stamp{0%{transform:rotate(-8deg) scale(1.6);opacity:0}60%{transform:rotate(-8deg) scale(.94);opacity:1}100%{transform:rotate(-8deg) scale(1)}}
+
+html{box-sizing:border-box;height:100%;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+[hidden]{display:none!important}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;height:100%;background:var(--ground);color:var(--ink);font-family:var(--f-body);font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;text-align:inherit}
+button:focus-visible,input:focus-visible,textarea:focus-visible,label:focus-within{outline:2px solid var(--cyan);outline-offset:2px}
+h1,h2,h3,p{margin:0}
+ul{margin:0;padding:0;list-style:none}
+
+.foil{background:conic-gradient(from var(--a),var(--gold),var(--rose),var(--cyan),var(--lime),var(--gold));animation:spin 7s linear infinite}
+.foil-text{background:conic-gradient(from var(--a) at 30% 50%,var(--gold),var(--rose),var(--cyan),var(--lime),var(--gold));-webkit-background-clip:text;background-clip:text;color:transparent;animation:spin 7s linear infinite}
+.mono{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+
+/* ---------- stage ---------- */
+.stage{height:100%;display:flex;align-items:center;justify-content:center;gap:72px;background:radial-gradient(60% 70% at 70% 40%,rgba(255,111,181,.10),transparent 70%),radial-gradient(50% 60% at 20% 80%,rgba(122,232,255,.08),transparent 70%),var(--ground)}
+.pitch{max-width:340px;display:flex;flex-direction:column;gap:18px}
+.pitch-mark{font-family:var(--f-display);font-size:128px;line-height:.8}
+.pitch h2{font-size:26px;font-weight:700;line-height:1.15;text-wrap:balance}
+.pitch p{color:var(--muted);font-size:15px}
+.pitch ul{display:grid;gap:10px;color:var(--muted);font-size:14px}
+.pitch li{display:flex;gap:10px}
+.pitch li b{color:var(--ink);font-weight:600}
+.pitch .mono{color:var(--faint)}
+
+.phone{position:relative;width:400px;height:min(860px,calc(100% - 48px));border-radius:44px;border:1px solid var(--line);background:var(--ground);overflow:hidden;display:grid;grid-template-rows:auto 1fr auto;box-shadow:0 40px 120px -20px rgba(0,0,0,.7),0 0 0 8px #0b0811,0 0 0 9px var(--line)}
+@media (max-width:719px){
+  .stage{display:block}
+  .pitch{display:none}
+  .phone{width:100%;height:100%;border-radius:0;border:0;box-shadow:none}
+}
+.gutter{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+
+/* ---------- top bar ---------- */
+.topbar{display:flex;align-items:center;justify-content:space-between;padding-block:14px 10px;border-bottom:1px solid transparent;z-index:3}
+.wordmark{font-family:var(--f-display);font-size:34px;line-height:1}
+.grouppill{display:flex;align-items:center;gap:8px;padding:5px 12px 5px 5px;border-radius:999px;background:var(--surface);border:1px solid var(--line)}
+.sigil{width:28px;height:28px;border-radius:50%;padding:1.5px}
+.sigil span{display:grid;place-items:center;width:100%;height:100%;border-radius:50%;background:var(--ground);font-family:var(--f-display);font-size:14px}
+.grouppill b{font-size:13px;font-weight:700;display:block;line-height:1.1}
+.grouppill small{font-family:var(--f-mono);font-size:10px;color:var(--muted);letter-spacing:.04em}
+
+/* ---------- view ---------- */
+.view{overflow-y:auto;overflow-x:hidden;scrollbar-width:none;position:relative}
+.view::-webkit-scrollbar{display:none}
+.stack{display:flex;flex-direction:column;gap:16px;padding-block:6px 28px}
+.anim>*{animation:rise .45s cubic-bezier(.2,.7,.2,1) both}
+.anim>*:nth-child(2){animation-delay:.04s}.anim>*:nth-child(3){animation-delay:.08s}.anim>*:nth-child(4){animation-delay:.12s}.anim>*:nth-child(5){animation-delay:.16s}.anim>*:nth-child(6){animation-delay:.2s}
+.eyebrow{font-family:var(--f-mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.h-display{font-family:var(--f-display);font-weight:400;font-size:44px;line-height:.95;text-wrap:balance}
+.lede{color:var(--muted);font-size:14px;margin-top:-8px}
+.section-h{display:flex;justify-content:space-between;align-items:baseline;margin-top:8px}
+.section-h h2{font-size:17px;font-weight:700}
+.section-h span{font-family:var(--f-mono);font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase}
+
+/* medallions */
+.med{--h:280;flex:none;display:grid;place-items:center;width:36px;height:36px;border-radius:50%;font-family:var(--f-display);font-size:19px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.4);background:radial-gradient(circle at 32% 26%,hsl(var(--h) 95% 74%),hsl(var(--h) 72% 46%) 55%,hsl(var(--h) 60% 20%));box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.22)}
+.med.sm{width:26px;height:26px;font-size:14px}
+.med.lg{width:88px;height:88px;font-size:50px}
+.med.xl{width:120px;height:120px;font-size:70px}
+.meds{display:flex}
+.meds .med{margin-left:-8px;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.22),0 0 0 2px var(--surface)}
+.meds .med:first-child{margin-left:0}
+
+/* chips + pills */
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;background:var(--raised);color:var(--muted);border:1px solid var(--line);white-space:nowrap}
+.chip-foil{color:#1a0f22;border:0;font-weight:500}
+.chip.foil{background:conic-gradient(from var(--a),var(--gold),var(--rose),var(--cyan),var(--lime),var(--gold))}
+.pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:6px;border:1px solid currentColor;white-space:nowrap}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.st-canon{color:var(--canon)}.st-contested{color:var(--contested)}.st-noncanon{color:var(--noncanon)}.st-pending{color:var(--cyan)}
+
+/* covers (generated "photo" art for each legend) */
+.cover{--h1:30;--h2:300;position:relative;overflow:hidden;background:radial-gradient(120% 90% at 18% 8%,hsl(var(--h1) 90% 64%) 0,transparent 55%),radial-gradient(90% 80% at 95% 100%,hsl(var(--h2) 85% 52%) 0,transparent 62%),linear-gradient(160deg,hsl(var(--h2) 45% 22%),hsl(var(--h1) 40% 10%))}
+.cover::after{content:"";position:absolute;inset:0;background-image:var(--grain);mix-blend-mode:overlay;opacity:.7;pointer-events:none}
+.cover .glyph{position:absolute;right:-4%;bottom:-18%;font-family:var(--f-display);font-size:var(--gs,180px);line-height:1;color:rgba(255,255,255,.2);mix-blend-mode:soft-light}
+
+/* ---------- home ---------- */
+.drop{position:relative;display:block;width:100%;border-radius:24px;overflow:hidden;min-height:300px;border:1px solid var(--line)}
+.drop .cover{position:absolute;inset:0;--gs:300px}
+.drop-body{position:absolute;inset:auto 0 0 0;padding:70px 18px 18px;background:linear-gradient(to top,var(--scrim) 30%,transparent);display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.drop-k{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--gold);margin-top:6px}
+.drop-t{font-family:var(--f-display);font-size:40px;line-height:.95}
+.drop-s{color:#ded5ef;font-size:14px;max-width:30ch}
+
+.card{display:block;width:100%;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:16px}
+.live{display:inline-flex;align-items:center;gap:7px;font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--noncanon)}
+.live::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;animation:pulse 1.4s ease-in-out infinite}
+.teaser{display:grid;gap:10px}
+.teaser-row{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.teaser h3{font-family:var(--f-display);font-weight:400;font-size:30px;line-height:1}
+.teaser p{color:var(--muted);font-size:13.5px}
+.cta-line{font-weight:600;font-size:13.5px;color:var(--ink);display:flex;align-items:center;gap:6px}
+
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tile{position:relative;border-radius:20px;padding:14px;min-height:150px;display:flex;flex-direction:column;justify-content:space-between;gap:10px;overflow:hidden;border:1px solid var(--line);min-width:0}
+.tile-wrapped{border:0;color:#1a0f22}
+.tile-wrapped::after{content:"";position:absolute;inset:0;background-image:var(--grain);mix-blend-mode:overlay;opacity:.6;pointer-events:none}
+.tile-wrapped .t-big{font-family:var(--f-display);font-size:30px;line-height:.9}
+.tile-wrapped .mono{color:#3b1d3a}
+.tile-brief{background:var(--surface)}
+.tile-brief .t-big{font-weight:800;font-size:17px;line-height:1.15}
+.tile .t-sub{font-size:12.5px}
+.tile-brief .t-sub{color:var(--muted)}
+
+.feed{display:grid}
+.feed li+li{border-top:1px solid var(--line)}
+.feed button{display:flex;gap:12px;align-items:flex-start;width:100%;padding:12px 2px}
+.feed .ftext{flex:1;min-width:0;font-size:14px;color:var(--muted)}
+.feed .ftext b{color:var(--ink);font-weight:600}
+.feed .fmeta{display:block;font-family:var(--f-mono);font-size:10.5px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;margin-top:3px}
+
+/* ---------- trading cards ---------- */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tcard{--h:280;display:block;position:relative;border-radius:18px;padding:1.5px;background:var(--line);aspect-ratio:5/7;max-width:100%;min-width:0}
+.tcard.legendary{background:conic-gradient(from var(--a),var(--gold),var(--rose),var(--cyan),var(--lime),var(--gold));animation:spin 7s linear infinite}
+.tcard.epic{background:linear-gradient(150deg,hsl(var(--h) 80% 65%),var(--line) 45%,hsl(var(--h) 80% 55%))}
+.tface{position:relative;height:100%;border-radius:16.5px;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:12px 10px 14px;text-align:center;background:radial-gradient(90% 60% at 50% 30%,hsl(var(--h) 60% 30% / .9),transparent 70%),linear-gradient(to bottom,hsl(var(--h) 30% 14%),var(--surface))}
+.tface::after{content:"";position:absolute;inset:0;background-image:var(--grain);mix-blend-mode:overlay;opacity:.35;pointer-events:none}
+.tface .trow{display:flex;justify-content:space-between;width:100%;font-family:var(--f-mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.tface .rar{color:hsl(var(--h) 90% 75%)}
+.tcard.legendary .rar{color:var(--gold)}
+.tface .alias{font-family:var(--f-display);font-size:25px;line-height:1;text-wrap:balance}
+.tface .real{font-family:var(--f-mono);font-size:10px;color:var(--muted);letter-spacing:.05em;margin-top:4px}
+.tface .cls{font-size:11.5px;color:var(--muted);margin-top:6px}
+
+.bigwrap{perspective:900px;display:flex;justify-content:center;padding-block:6px 4px}
+.bigcard{--rx:0deg;--ry:0deg;--mx:50%;--my:30%;width:min(280px,82%);transform:rotateX(var(--rx)) rotateY(var(--ry));transition:transform .25s ease-out;touch-action:pan-y}
+.bigcard .tface{padding:18px 16px 18px;gap:8px}
+.bigcard .tface::before{content:"";position:absolute;inset:0;background:radial-gradient(40% 30% at var(--mx) var(--my),rgba(255,255,255,.22),transparent 70%);mix-blend-mode:overlay;pointer-events:none;z-index:1}
+.bigcard .alias{font-size:40px}
+.stats{display:grid;gap:7px;width:100%;margin-top:4px}
+.stat{display:grid;grid-template-columns:78px 1fr 22px;align-items:center;gap:8px;font-family:var(--f-mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left}
+.stat i{display:block;height:5px;border-radius:3px;background:rgba(255,255,255,.1);overflow:hidden}
+.stat i::after{content:"";display:block;height:100%;width:var(--v);background:hsl(var(--h) 90% 68%);border-radius:3px}
+.stat b{color:var(--ink);font-weight:500;text-align:right;font-variant-numeric:tabular-nums}
+
+.detail-top{position:sticky;top:0;z-index:4;display:flex;align-items:center;justify-content:space-between;padding-block:8px;background:linear-gradient(to bottom,var(--ground) 60%,transparent)}
+.back{display:inline-flex;align-items:center;gap:4px;font-weight:600;font-size:14px;padding:6px 10px 6px 4px;border-radius:999px}
+.back svg{width:20px;height:20px}
+.block{display:grid;gap:10px}
+.block h3{font-family:var(--f-mono);font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.titles{display:flex;flex-wrap:wrap;gap:8px}
+.titles span{padding:7px 12px;border-radius:10px;background:var(--surface);border:1px solid var(--line);font-size:13.5px;font-weight:600}
+.titles span:first-child{border-color:hsl(var(--h) 80% 60%);color:hsl(var(--h) 95% 82%)}
+.quote{background:var(--surface);border-radius:16px;padding:14px 16px;border:1px solid var(--line)}
+.quote q{font-family:var(--f-display);font-size:24px;line-height:1.05;quotes:"“" "”"}
+.quote span{display:block;margin-top:6px;font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.bio{font-size:15px;color:#ddd4ee}
+.footnote{font-size:12.5px;color:var(--faint);border-top:1px dashed var(--line);padding-top:12px}
+
+/* ---------- legends timeline ---------- */
+.era{position:relative;display:grid;gap:10px;padding-left:22px}
+.era::before{content:"";position:absolute;left:5px;top:10px;bottom:-14px;width:1.5px;background:linear-gradient(var(--line),var(--line) 80%,transparent)}
+.era-h{position:relative;display:grid;gap:2px}
+.era-h::before{content:"";position:absolute;left:-22px;top:6px;width:12px;height:12px;border-radius:50%;background:var(--ground);border:2px solid var(--muted)}
+.era.now .era-h::before{border-color:var(--rose);background:var(--rose);box-shadow:0 0 0 4px rgba(255,111,181,.2)}
+.era-name{font-family:var(--f-display);font-size:28px;line-height:1}
+.era-h .mono{color:var(--faint)}
+.era-h p{font-size:13px;color:var(--muted)}
+.lrow{display:flex;gap:12px;align-items:center;width:100%;padding:8px;border-radius:16px;background:var(--surface);border:1px solid var(--line)}
+.lrow .cover{width:64px;height:64px;border-radius:12px;flex:none;--gs:80px}
+.lrow .ltxt{flex:1;min-width:0;display:grid;gap:3px}
+.lrow .ltitle{font-weight:700;font-size:15px}
+.lrow .lmeta{font-family:var(--f-mono);font-size:10.5px;color:var(--faint);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* legend detail */
+.ld-hero{position:relative;height:300px;margin-bottom:-60px}
+.ld-hero .cover{position:absolute;inset:0;--gs:340px}
+.ld-hero::after{content:"";position:absolute;inset:auto 0 0 0;height:160px;background:linear-gradient(to top,var(--ground),transparent)}
+.ld-hero .detail-top{position:absolute;inset:0 0 auto 0;background:none}
+.ld-hero .back{background:rgba(17,12,25,.55);backdrop-filter:blur(8px)}
+.ld-head{position:relative;z-index:2;display:grid;gap:8px}
+.ld-title{font-family:var(--f-display);font-size:50px;line-height:.92;text-wrap:balance}
+.ld-meta{font-family:var(--f-mono);font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.stamp{justify-self:start;margin-top:6px;transform:rotate(-8deg);border:2.5px double currentColor;border-radius:6px;padding:5px 12px 4px;font-family:var(--f-mono);font-weight:500;font-size:13px;letter-spacing:.2em;text-transform:uppercase;animation:stamp .5s cubic-bezier(.3,1.4,.5,1) both .15s}
+.stamp small{display:block;font-size:9px;letter-spacing:.1em;opacity:.8}
+.story p{font-size:16px;line-height:1.6;color:#e4dcf3;max-width:62ch}
+.story p+p{margin-top:12px}
+.story p:first-child::first-letter{font-family:var(--f-display);float:left;font-size:58px;line-height:.8;padding:6px 8px 0 0;color:var(--gold)}
+.witness{display:flex;flex-wrap:wrap;gap:8px}
+.witness button{display:flex;align-items:center;gap:8px;padding:4px 12px 4px 4px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-size:13px;font-weight:600}
+.evidence{display:flex;gap:10px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.evidence::-webkit-scrollbar{display:none}
+.ev{flex:none;width:118px;height:118px;border-radius:14px;overflow:hidden;position:relative;border:1px solid var(--line);background:var(--surface)}
+.ev .cover{position:absolute;inset:0;--gs:120px}
+.ev .evl{position:absolute;inset:auto 0 0 0;padding:6px 8px;font-family:var(--f-mono);font-size:9.5px;letter-spacing:.04em;background:linear-gradient(to top,var(--scrim),transparent);color:var(--ink);z-index:1}
+.wave{position:absolute;inset:18px 12px 34px;display:flex;align-items:center;gap:2.5px}
+.wave i{flex:1;background:var(--cyan);border-radius:2px;opacity:.85}
+.reacts{display:flex;flex-wrap:wrap;gap:8px}
+.reacts button{display:flex;gap:6px;align-items:center;padding:7px 12px;border-radius:999px;background:var(--surface);border:1px solid var(--line);font-size:14px;font-variant-numeric:tabular-nums}
+.reacts button.on{border-color:var(--rose);background:rgba(255,111,181,.12)}
+.reacts b{font-weight:600;font-size:13px}
+
+/* ---------- court ---------- */
+.case{display:grid;gap:14px}
+.case-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.case-top .mono{color:var(--faint)}
+.case h2{font-family:var(--f-display);font-weight:400;font-size:34px;line-height:.95;text-wrap:balance}
+.claim{display:flex;gap:10px;align-items:flex-start}
+.claim .bubble{flex:1;min-width:0;background:var(--raised);border-radius:4px 16px 16px 16px;padding:10px 13px;font-size:14.5px}
+.claim .bubble small{display:block;font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:3px}
+.claim.counter .bubble{border:1px solid rgba(255,107,133,.35)}
+.evchip{display:inline-flex;align-items:center;gap:6px;margin-top:8px;padding:5px 10px;border-radius:8px;background:var(--ground);font-family:var(--f-mono);font-size:10.5px;color:var(--cyan);letter-spacing:.04em}
+.evchip::before{content:"";width:0;height:0;border-left:7px solid currentColor;border-top:4.5px solid transparent;border-bottom:4.5px solid transparent}
+.tally{display:grid;gap:8px}
+.tally-bar{display:flex;height:10px;border-radius:6px;overflow:hidden;background:var(--raised);gap:2px}
+.tally-bar i{display:block;height:100%;transition:width .6s cubic-bezier(.2,.8,.2,1)}
+.tally-bar .a{background:var(--canon)}
+.tally-bar .b{background:var(--noncanon)}
+.tally-legend{display:flex;justify-content:space-between;align-items:center;gap:10px;font-family:var(--f-mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase}
+.tally-legend span{display:flex;align-items:center;gap:8px}
+.vote{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vbtn{padding:14px 10px;border-radius:14px;text-align:center;font-weight:700;font-size:15px;border:1.5px solid currentColor;transition:transform .1s}
+.vbtn:active{transform:scale(.97)}
+.vbtn.a{color:var(--canon);background:rgba(110,240,176,.08)}
+.vbtn.b{color:var(--noncanon);background:rgba(255,107,133,.08)}
+.vbtn small{display:block;font-family:var(--f-mono);font-weight:400;font-size:10px;letter-spacing:.06em;text-transform:uppercase;opacity:.75;margin-top:2px}
+.verdict{display:grid;gap:8px;padding:14px;border-radius:14px;background:var(--ground);border:1px dashed var(--line)}
+.verdict p{font-size:14.5px}
+.verdict .stamp{font-size:15px}
+.youvote{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);text-align:center}
+.rulings li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 2px}
+.rulings li+li{border-top:1px solid var(--line)}
+.rulings .rq{font-size:14px;min-width:0}
+.rulings .rq small{display:block;font-family:var(--f-mono);font-size:10.5px;color:var(--faint);letter-spacing:.05em;text-transform:uppercase;margin-top:2px}
+
+/* ---------- tab bar ---------- */
+.tabbar{display:grid;grid-template-columns:repeat(5,1fr);align-items:center;padding-block:8px 10px;border-top:1px solid var(--line);background:rgba(17,12,25,.92);backdrop-filter:blur(14px);z-index:5}
+.tab{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 0;color:var(--faint);font-size:10.5px;font-weight:600;letter-spacing:.02em}
+.tab svg{width:23px;height:23px}
+.tab.on{color:var(--ink)}
+.tab.on svg{color:var(--rose)}
+.tab .badge{position:absolute;top:0;left:calc(50% + 6px);min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--noncanon);color:#1a0f22;font-family:var(--f-mono);font-size:10px;font-weight:500;display:grid;place-items:center}
+.fab{justify-self:center;width:54px;height:54px;border-radius:18px;display:grid;place-items:center;color:#1a0f22;box-shadow:0 8px 24px -6px rgba(255,111,181,.55);transform:translateY(-6px)}
+.fab svg{width:26px;height:26px}
+
+/* ---------- sheet ---------- */
+.overlay{position:absolute;inset:0;z-index:20}
+.sheet-bg{position:absolute;inset:0;background:rgba(5,3,9,.6);backdrop-filter:blur(3px)}
+.sheet{position:absolute;inset:auto 0 0 0;max-height:92%;overflow-y:auto;background:var(--surface);border-radius:26px 26px 0 0;border-top:1px solid var(--line);padding-block:10px 22px;display:grid;gap:16px;animation:rise .3s cubic-bezier(.2,.8,.2,1)}
+.grab{justify-self:center;width:40px;height:4px;border-radius:2px;background:var(--line)}
+.sheet h2{font-family:var(--f-display);font-weight:400;font-size:36px;line-height:1}
+.sheet .lede{margin-top:-10px}
+.seg{display:flex;flex-wrap:wrap;gap:8px}
+.seg label{position:relative;cursor:pointer}
+.seg input{position:absolute;opacity:0;inset:0;cursor:pointer}
+.seg span{display:block;padding:8px 14px;border-radius:999px;border:1px solid var(--line);font-size:13.5px;font-weight:600;color:var(--muted)}
+.seg input:checked+span{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.seg.cast input:checked+span{background:hsl(var(--h) 70% 55%);border-color:transparent;color:#fff}
+.field{display:grid;gap:6px}
+.field label{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.field input,.field textarea{width:100%;background:var(--ground);border:1px solid var(--line);border-radius:12px;padding:12px 14px;color:var(--ink);font:inherit;font-size:15px;resize:none}
+.field input::placeholder,.field textarea::placeholder{color:var(--faint)}
+.btn-foil{display:block;width:100%;padding:15px;border-radius:16px;text-align:center;font-weight:800;font-size:15px;color:#1a0f22}
+.btn-ghost{display:block;width:100%;padding:12px;text-align:center;font-weight:600;color:var(--muted)}
+.err{color:var(--noncanon);font-size:13px}
+
+/* ---------- story viewer ---------- */
+.story-v{position:absolute;inset:0;z-index:30;display:grid;background:var(--ground)}
+.slide{position:relative;display:flex;flex-direction:column;justify-content:center;gap:14px;padding-block:80px 60px;overflow:hidden}
+.slide::after{content:"";position:absolute;inset:0;background-image:var(--grain);mix-blend-mode:overlay;opacity:.55;pointer-events:none}
+.slide>*{position:relative;z-index:1;animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
+.slide>*:nth-child(2){animation-delay:.08s}.slide>*:nth-child(3){animation-delay:.16s}.slide>*:nth-child(4){animation-delay:.24s}.slide>*:nth-child(5){animation-delay:.32s}
+.bg0{background:radial-gradient(80% 60% at 20% 20%,rgba(255,111,181,.55),transparent 70%),radial-gradient(70% 60% at 90% 90%,rgba(122,232,255,.4),transparent 70%),var(--ground)}
+.bg1{background:radial-gradient(90% 70% at 80% 10%,rgba(255,196,107,.5),transparent 70%),radial-gradient(70% 60% at 10% 100%,rgba(255,111,181,.35),transparent 70%),var(--ground)}
+.bg2{background:radial-gradient(90% 70% at 10% 30%,rgba(122,232,255,.45),transparent 70%),radial-gradient(60% 60% at 100% 80%,rgba(185,255,143,.3),transparent 70%),var(--ground)}
+.bg3{background:radial-gradient(90% 70% at 70% 80%,rgba(160,110,255,.55),transparent 70%),radial-gradient(60% 60% at 0% 0%,rgba(255,196,107,.3),transparent 70%),var(--ground)}
+.s-k{font-family:var(--f-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink);opacity:.8}
+.s-big{font-family:var(--f-display);font-size:54px;line-height:.92;text-wrap:balance}
+.s-num{font-family:var(--f-display);font-size:150px;line-height:.8}
+.s-sub{font-size:17px;line-height:1.45;color:#e8e0f6;max-width:28ch}
+.bars{position:absolute;inset:0 0 auto 0;display:flex;gap:4px;padding-top:14px;z-index:3}
+.bars span{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.25);overflow:hidden}
+.bars span i{display:block;height:100%;background:var(--ink);transform-origin:left;transform:scaleX(0)}
+.bars span.done i{transform:scaleX(1)}
+.bars span.active i{animation:fillbar 5.5s linear forwards}
+.s-close{position:absolute;top:28px;right:max(12px,env(safe-area-inset-right,0px));z-index:4;width:40px;height:40px;display:grid;place-items:center;border-radius:50%}
+.s-close svg{width:22px;height:22px}
+.tapz{position:absolute;inset:0;display:grid;grid-template-columns:1fr 2fr;z-index:2}
+.s-cta{z-index:3;margin-top:10px;max-width:280px}
+
+.toast{position:absolute;left:16px;right:16px;bottom:96px;z-index:40;padding:12px 14px;border-radius:14px;background:var(--ink);color:var(--ground);font-weight:600;font-size:14px;box-shadow:0 10px 30px rgba(0,0,0,.5);animation:rise .3s ease-out}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  .bars span.active i{transform:scaleX(1)}
+}
+</style>
+</head>
+<body>
+<div class="stage">
+  <aside class="pitch">
+    <div class="pitch-mark foil-text">Lore</div>
+    <h2>The official history of your friend group.</h2>
+    <p>Every group has its legends, nicknames and running jokes. They get lost in the group chat. Lore keeps them.</p>
+    <ul>
+      <li><b>Cast</b> Friends write each other’s character pages.</li>
+      <li><b>Legends</b> The great stories, with the evidence.</li>
+      <li><b>Canon Court</b> The group votes on what really happened.</li>
+      <li><b>Briefings</b> New people catch up in two minutes.</li>
+    </ul>
+    <div class="mono">Interactive prototype · tap around</div>
+  </aside>
+
+  <div class="phone" id="app">
+    <header class="topbar gutter">
+      <div class="wordmark foil-text">Lore</div>
+      <div class="grouppill">
+        <div class="sigil foil"><span>9</span></div>
+        <div><b>The Flat 9 Lot</b><small>6 members · <span id="entryCount">147</span> entries</small></div>
+      </div>
+    </header>
+    <main class="view" id="view"></main>
+    <nav class="tabbar gutter" id="tabbar">
+      <button class="tab" data-act="tab:home" aria-label="Chronicle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h10a3 3 0 0 1 3 3v13H9a3 3 0 0 1-3-3z"/><path d="M6 17a3 3 0 0 1 3-3h10"/><path d="M10 8h5"/></svg>Chronicle</button>
+      <button class="tab" data-act="tab:cast" aria-label="Cast"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><circle cx="17" cy="9" r="2.5"/><path d="M15.8 14.1A4.6 4.6 0 0 1 21 18.6"/></svg>Cast</button>
+      <button class="fab foil" data-act="add" aria-label="Add to the lore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button class="tab" data-act="tab:legends" aria-label="Legends"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l2.4 5.6 6 .7-4.5 4 1.3 5.9L12 16.1l-5.2 3.1 1.3-5.9-4.5-4 6-.7z"/></svg>Legends</button>
+      <button class="tab" data-act="tab:court" aria-label="Canon Court"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v15M7 20h10M5 7h14"/><path d="M5 7l-2.6 6a3 3 0 0 0 5.2 0z"/><path d="M19 7l-2.6 6a3 3 0 0 0 5.2 0z"/></svg>Court<span class="badge" id="courtBadge">2</span></button>
+    </nav>
+    <div id="overlay"></div>
+  </div>
+</div>
+
+<script>
+const ICON_BACK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>';
+const ICON_X='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const ARROW='<span aria-hidden="true">→</span>';
+
+const C={
+  mo:{name:"Mo Rahman",short:"Mo",alias:"Pigeon",h:24,rarity:"Legendary",cls:"Chaos Agent",entries:41,first:"Freshers’ Week · Sep 2022",
+    stats:{Chaos:9,Reliability:3,"Aux skills":7},
+    titles:["Bane of Pigeons","Wakefield’s Most Wanted","Aux Tyrant (2023–24)"],
+    quotes:[["It looked at me first.","Leeds station · Oct 2022"],["I’m not lost. I’m in Wakefield.","Forty minutes later"]],
+    bio:"Arrived in Flat 9 with a rice cooker and no plan. Has never once left a night out at the same time as everyone else.",
+    legends:["pigeon"],by:"Priya",ago:"3 days ago"},
+  ellie:{name:"Ellie Marsh",short:"Ellie",alias:"The Accountant",h:200,rarity:"Epic",cls:"Keeper of the Ledger",entries:28,first:"Freshers’ Week · Sep 2022",
+    stats:{Chaos:2,Reliability:10,"Aux skills":4},
+    titles:["The Accountant","Author of the Treaty","Chancellor (pending)"],
+    quotes:[["You owe me £3.42.","Every day since 2022"],["It’s not petty if it’s in writing.","The Hummus Wars · 2023"]],
+    bio:"Has split every bill since 2022 to the penny. Drafted the Fridge Treaty in one evening. Still waiting on £3.42 from Dev.",
+    legends:["fridge","pigeon"],by:"Mo",ago:"last week"},
+  dev:{name:"Dev Mistry",short:"Dev",alias:"Two Kebabs",h:340,rarity:"Epic",cls:"Late-Night Strategist",entries:12,first:"Freshers’ Week · Sep 2022",
+    stats:{Chaos:7,Reliability:5,"Aux skills":2},
+    titles:["Two Kebabs","Clause 7 Repeat Offender","Rename Rejected ×4"],
+    quotes:[["One’s for later.","3:04am · Nov 2022"],["Please just call me Dev.","Nobody does"]],
+    bio:"Ordered two kebabs at 3am in November 2022 and has been paying for it ever since. Responsible for 29 of the 32 breaches of Clause 7.",
+    legends:["kebab","fridge","lisbon"],by:"Ellie",ago:"yesterday"},
+  sasha:{name:"Sasha Okafor",short:"Sasha",alias:"Sat Nav",h:160,rarity:"Rare",cls:"Wayfinder (Retired)",entries:19,first:"Flat 9 · Jan 2023",
+    stats:{Chaos:6,Reliability:6,"Aux skills":9},
+    titles:["Sat Nav (Retired)","One-Shoe Survivor","Best Aux in the Group"],
+    quotes:[["Trust me, it’s left.","Bairro Alto · 11pm"],["The roof? How?","Magaluf · the next morning"]],
+    bio:"Moved into Flat 9 in second term and immediately took over the aux. Formally stripped of navigation rights in April 2026.",
+    legends:["shoe","lisbon"],by:"Tom",ago:"Saturday"},
+  tom:{name:"Tom Hughes",short:"Tom",alias:"Big Tom",h:96,rarity:"Rare",cls:"Swan Challenger",entries:9,first:"Freshers’ Week · Sep 2022",
+    stats:{Chaos:8,Reliability:7,"Aux skills":3},
+    titles:["Big Tom (5′5″)","Looked Away For One Second","Swan Challenger"],
+    quotes:[["I looked away for one second.","Magaluf · Jul 2024"],["It hissed first. That’s self-defence.","Hyde Park · Oct 2026"]],
+    bio:"The smallest member of the group, hence the name. Claims to have won a fight with a swan. The Canon Court is still deciding.",
+    legends:["shoe","swan"],by:"Sasha",ago:"2 hours ago"},
+  priya:{name:"Priya Shah",short:"Priya",alias:"The Oracle",h:268,rarity:"Legendary",cls:"Seer of Flat 9",entries:38,first:"Freshers’ Week · Sep 2022",
+    stats:{Chaos:4,Reliability:9,"Aux skills":6},
+    titles:["The Oracle","Called It ×7","Chief Witness"],
+    quotes:[["Give it three weeks.","On every new couple"],["I have video.","The Swan · Oct 2026"]],
+    bio:"Has correctly predicted seven relationships, two breakups and one engagement. Films everything. The group’s most reliable witness.",
+    legends:["shoe","swan"],by:"Dev",ago:"5 days ago"}
+};
+const ORDER=["mo","priya","ellie","dev","sasha","tom"];
+
+const L={
+  swan:{title:"The Swan",date:"24 Oct 2026",place:"Hyde Park, London",era:"now",status:"contested",votes:"In the Canon Court",h1:200,h2:250,glyph:"S",
+    cast:["tom","priya"],
+    story:["Tom says a swan came at him by the Serpentine and he ‘held his ground’. He has repeated this to anyone who will listen.",
+      "Priya has a 19-second video. In it, Tom is running. The swan is walking.",
+      "Tom says the video ‘lacks context’. The case is with the Canon Court."],
+    ev:[["img","IMG_8812.HEIC"],["voice","0:19"],["img","serpentine.jpg"]],reacts:[["🦢",9],["💀",14],["⚖️",5]]},
+  lisbon:{title:"The Lisbon Death March",date:"18 Apr 2026",place:"Bairro Alto, Lisbon",era:"lisbon",status:"canon",votes:"6–0",h1:40,h2:10,glyph:"L",
+    cast:["sasha","dev","mo","ellie","tom","priya"],
+    story:["‘Trust me, it’s left.’ Sasha said this at 11pm outside a bar in Bairro Alto, and everyone followed her.",
+      "Two hours and 6.4 miles later the group reached a motorway service station. Dev bought two kebabs.",
+      "Sasha was formally stripped of navigation rights the next morning, 6–0. Her title was updated to Sat Nav (Retired)."],
+    ev:[["img","route_map.png"],["img","IMG_6120.HEIC"],["voice","1:12"]],reacts:[["🗺️",11],["😂",21],["🥙",6]]},
+  shoe:{title:"The Night of the Lost Shoe",date:"12 Jul 2024",place:"Magaluf",era:"magaluf",status:"canon",votes:"5–0 · 1 abstained",h1:320,h2:280,glyph:"N",
+    cast:["sasha","tom","priya"],
+    story:["Sasha left the bar with two shoes and got back to the hotel with one, plus a Pringles tube on her other foot.",
+      "Nobody saw the swap. Tom, who was meant to be watching her, says he looked away ‘for one second’.",
+      "The missing shoe was found the next morning on the hotel roof, four floors up. Nobody has ever explained how. It is the group’s longest-running investigation."],
+    ev:[["img","IMG_3301.HEIC"],["img","the_roof.jpg"],["voice","0:31"]],reacts:[["👟",17],["🕵️",8],["😭",12]]},
+  fridge:{title:"The Great Fridge Treaty",date:"9 Feb 2023",place:"Flat 9 kitchen",era:"flat9",status:"canon",votes:"6–0",h1:180,h2:140,glyph:"T",
+    cast:["ellie","dev","mo","sasha","tom","priya"],
+    story:["After the Hummus Wars, Ellie drafted a four-page treaty that divided the fridge into six sovereign shelves.",
+      "All six signed it. It is still taped to the fridge door, slightly stained.",
+      "Clause 7 says nobody eats anyone else’s cheese. It has been broken 32 times. Dev is responsible for 29 of them."],
+    ev:[["img","treaty_p1.jpg"],["img","treaty_p4.jpg"],["img","clause7.png"]],reacts:[["📜",10],["🧀",29],["😤",4]]},
+  kebab:{title:"Two Kebabs",date:"19 Nov 2022",place:"Hyde Park Corner, Leeds",era:"freshers",status:"canon",votes:"6–0",h1:10,h2:345,glyph:"K",
+    cast:["dev","mo","tom"],
+    story:["3:04am. Dev ordered two large doner kebabs. When asked why, he said: ‘One’s for later.’",
+      "Later never came. Both kebabs were gone before the walk home was over.",
+      "He has been Two Kebabs ever since. He has tried to change his name four times. The vote has failed every time."],
+    ev:[["img","IMG_0457.HEIC"],["voice","0:08"]],reacts:[["🥙",24],["😂",18]]},
+  pigeon:{title:"The Pigeon Incident",date:"24 Oct 2022",place:"Leeds station, platform 6",era:"freshers",status:"canon",votes:"6–0",h1:28,h2:300,glyph:"P",
+    cast:["mo","ellie","dev"],
+    story:["Mo bought a Greggs sausage roll and, for reasons nobody has explained, offered a piece to a pigeon on platform 6.",
+      "The pigeon took the whole thing. Mo chased it through the barriers and onto the 14:12. The doors closed behind him.",
+      "He got off in Wakefield. The pigeon stayed on. Ellie’s text, ‘where are you’, is now framed in the kitchen."],
+    ev:[["img","IMG_2207.HEIC"],["voice","0:42"],["img","framed_text.jpg"]],reacts:[["🐦",31],["💀",22],["🚆",7]]}
+};
+const ERAS=[
+  {id:"now",name:"The Present Day",when:"Autumn 2026 –",blurb:"Graduated, scattered, still arguing about a swan."},
+  {id:"lisbon",name:"The Lisbon Arc",when:"Apr 2026",blurb:"The last trip before finals. 6.4 miles in the wrong direction."},
+  {id:"magaluf",name:"The Magaluf Arc",when:"Summer 2024",blurb:"One week, one hotel, one shoe."},
+  {id:"flat9",name:"The Flat 9 Era",when:"2023 – 2024",blurb:"Six people, one kitchen, one treaty."},
+  {id:"freshers",name:"The Freshers Era",when:"Sep – Dec 2022",blurb:"Where it all began. Six strangers on one corridor."}
+];
+const STATUS={canon:"Canon",contested:"Contested",noncanon:"Non-canon",pending:"In court"};
+
+const CASES={
+  swan:{no:"0047",opened:"Opened Sat 24 Oct",title:"The Swan Question",
+    claim:{who:"tom",text:"I fought a swan in Hyde Park and I won."},
+    counter:{who:"priya",text:"The swan won. I have video.",ev:"video · 0:19"},
+    a:"Canon",b:"Non-canon",aSub:"Tom won",bSub:"The swan won",votesA:["tom","dev"],votesB:["priya","ellie","sasha"],you:null},
+  rename:{no:"0048",opened:"Opened yesterday",title:"Motion to rename Two Kebabs",
+    claim:{who:"dev",text:"I would like to be called Dev now. I’m 22.",ev:"attempt #5"},
+    a:"Approve",b:"Reject",aSub:"He becomes Dev",bSub:"He stays Two Kebabs",votesA:["dev"],votesB:["priya","tom","ellie","sasha"],you:null}
+};
+const RULINGS=[
+  ["Did Ellie cry at Paddington 2?","Ruled Oct 2026","canon","6–0"],
+  ["Tom is 5′7″","Ruled Sep 2026","noncanon","1–5"],
+  ["Mo was ‘basically’ on time to graduation","Ruled Jul 2026","noncanon","0–6"],
+  ["The shoe was on the roof before we arrived","Ruled Aug 2024","contested","3–3"]
+];
+
+let FEED=[
+  {who:"priya",html:"<b>Priya</b> filed counter-evidence in <b>The Swan</b>",meta:"video · 0:19 · 2h ago",go:"legend:swan"},
+  {who:"ellie",html:"<b>Ellie</b> updated <b>The Great Fridge Treaty</b>: Clause 7 broken again (32)",meta:"5h ago",go:"legend:fridge"},
+  {who:"dev",html:"<b>Dev</b> asked the court to rename him “Dev”. Attempt #5.",meta:"yesterday",go:"tab:court"},
+  {who:"sasha",html:"<b>Sasha</b> earned a new title: <b>Sat Nav (Retired)</b>",meta:"Saturday",go:"char:sasha"},
+  {who:"mo",html:"<b>Mo</b> added 3 photos to <b>The Pigeon Incident</b>",meta:"last week",go:"legend:pigeon"}
+];
+const USER_CASES=[];
+
+const STORIES={
+  wrapped:[
+    {k:"Lore Wrapped 2026 · sneak peek",big:"The Flat 9 Lot had a year.",sub:"Here’s how it went down."},
+    {k:"Entries added this year",num:"147",sub:"41 more than last year. Mo added 41 of them himself."},
+    {k:"Most mentioned",med:"mo",big:"Mo",sub:"Named in 63 entries. Pigeons involved in 11 of them."},
+    {k:"Most contested",big:"The Swan",sub:"Two videos, 214 messages and no agreement. Still with the Canon Court."},
+    {k:"Word of the year",big:"“allegedly”",sub:"Used 212 times in the Canon Court."},
+    {k:"Your era",big:"The Lisbon Arc",sub:"6.4 miles in the wrong direction. Worth it."},
+    {k:"Full Wrapped drops 1 December",big:"Keep the lore alive.",sub:"Your 2026 Lore Book will be ready to order: 96 pages, hardback, every legend.",cta:"Done"}
+  ],
+  brief:[
+    {k:"Lore briefing · for Jas",big:"Welcome to the Flat 9 Lot.",sub:"Four years of lore. Five things to know before Friday."},
+    {k:"1 of 5",med:"mo",big:"Never say “pigeon” around Mo.",sub:"The Pigeon Incident, October 2022. He ended up in Wakefield."},
+    {k:"2 of 5",med:"dev",big:"Dev is called Two Kebabs.",sub:"He’ll ask you to call him Dev. Don’t. The vote has failed four times."},
+    {k:"3 of 5",med:"ellie",big:"Read the Fridge Treaty.",sub:"Clause 7: nobody eats anyone else’s cheese. It’s taped to the fridge."},
+    {k:"4 of 5",med:"sasha",big:"Never let Sasha navigate.",sub:"Lisbon, April 2026. 6.4 miles. It ended at a motorway."},
+    {k:"5 of 5",med:"priya",big:"Priya is always right.",sub:"She’s already predicted how long you and Dev will last. She isn’t telling."},
+    {k:"Briefing complete",big:"You’re caught up.",sub:"Lore level: Initiate. Earn your first title by appearing in a legend.",cta:"Enter the lore"}
+  ]
+};
+
+const state={tab:"home",detail:null,story:null,reacted:{}};
+const $=s=>document.querySelector(s);
+const view=$("#view"),overlay=$("#overlay");
+
+/* ---------- small builders ---------- */
+const med=(id,size="")=>`<span class="med ${size}" style="--h:${C[id].h}" aria-hidden="true">${C[id].short[0]}</span>`;
+const meds=(ids,size="sm")=>`<span class="meds">${ids.map(i=>med(i,size)).join("")}</span>`;
+const cover=(l,cls="")=>`<div class="cover ${cls}" style="--h1:${l.h1};--h2:${l.h2}"><span class="glyph">${l.glyph}</span></div>`;
+const pill=s=>`<span class="pill st-${s}">${STATUS[s]}</span>`;
+const daysOfLore=()=>Math.max(1,Math.floor((Date.now()-new Date("2022-09-21").getTime())/864e5));
+const today=()=>new Date().toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"});
+
+function tally(c){
+  const a=c.votesA.length+(c.you==="a"?1:0), b=c.votesB.length+(c.you==="b"?1:0), total=6, left=total-a-b;
+  return {a,b,left,html:`<div class="tally">
+    <div class="tally-bar"><i class="a" style="width:${a/total*100}%"></i><i class="b" style="width:${b/total*100}%"></i></div>
+    <div class="tally-legend"><span class="st-canon">${c.a} ${a}</span><span style="color:var(--faint)">${left?left+" to vote":"all votes in"}</span><span class="st-noncanon">${b} ${c.b}</span></div></div>`};
+}
+function verdict(id){
+  const c=CASES[id];
+  if(id==="swan") return c.you==="b"
+    ? {s:"noncanon",head:"Non-canon · 4–2",text:"The swan won. Tom’s title is now <b>Swan Challenger (Lost)</b>."}
+    : {s:"contested",head:"Hung court · 3–3",text:"The Swan stays contested. Priya has already filed an appeal."};
+  return c.you==="a"
+    ? {s:"noncanon",head:"Rejected · 4–2",text:"Dev remains Two Kebabs. He thanks you for your support."}
+    : {s:"noncanon",head:"Rejected · 5–1",text:"Dev remains Two Kebabs. Attempt #6 is expected by Friday."};
+}
+
+/* ---------- views ---------- */
+function vHome(){
+  const sw=CASES.swan, t=tally(sw);
+  const courtLine = sw.you ? `<p>Ruled: <b>${verdict("swan").head}</b>. ${verdict("swan").text}</p>`
+    : `<p>Tom says he won. Priya has video. Five votes are in. Yours is the last one.</p>`;
+  return `<section class="stack gutter anim">
+    <div class="eyebrow">${today()} · Day ${daysOfLore().toLocaleString("en-GB")} of the lore</div>
+    <button class="drop" data-act="legend:pigeon">
+      ${cover(L.pigeon)}
+      <div class="drop-body">
+        <span class="chip chip-foil foil">Lore drop</span>
+        <div class="drop-k">4 years ago this week</div>
+        <div class="drop-t">The Pigeon Incident</div>
+        <div class="drop-s">Mo offered a pigeon some sausage roll. He ended up in Wakefield.</div>
+      </div>
+    </button>
+    <button class="card teaser" data-act="tab:court">
+      <div class="teaser-row"><span class="live">${sw.you?"Court has ruled":"Court in session"}</span><span class="mono" style="color:var(--faint)">Case ${sw.no}</span></div>
+      <h3>The Swan Question</h3>
+      ${courtLine}
+      ${t.html}
+      <span class="cta-line">${sw.you?"See the ruling":"Cast your vote"} ${ARROW}</span>
+    </button>
+    <div class="duo">
+      <button class="tile tile-wrapped foil" data-act="story:wrapped">
+        <span class="mono">Sneak peek</span>
+        <span><span class="t-big">Lore Wrapped 2026</span></span>
+        <span class="t-sub">Your year in legends ${ARROW}</span>
+      </button>
+      <button class="tile tile-brief" data-act="story:brief">
+        ${meds(["dev"],"")}
+        <span class="t-big">Jas joins the group on Friday</span>
+        <span class="t-sub">Preview the briefing she’ll get ${ARROW}</span>
+      </button>
+    </div>
+    <div class="section-h"><h2>Latest</h2><span>The Flat 9 Lot</span></div>
+    <ul class="feed">${FEED.map(f=>`<li><button data-act="${f.go}">${med(f.who)}<span class="ftext">${f.html}<span class="fmeta">${f.meta}</span></span></button></li>`).join("")}</ul>
+  </section>`;
+}
+
+function tcard(id){
+  const c=C[id];
+  return `<button class="tcard ${c.rarity.toLowerCase()}" style="--h:${c.h}" data-act="char:${id}" aria-label="${c.alias}, ${c.name}">
+    <div class="tface">
+      <div class="trow"><span class="rar">${c.rarity}</span><span>${c.entries} entries</span></div>
+      ${med(id,"lg")}
+      <div><div class="alias">${c.alias}</div><div class="real">${c.name}</div><div class="cls">${c.cls}</div></div>
+    </div></button>`;
+}
+function vCast(){
+  return `<section class="stack gutter anim">
+    <div class="eyebrow">6 members · pages written by friends</div>
+    <h1 class="h-display">The Cast</h1>
+    <p class="lede">Nobody writes their own page. That’s the rule.</p>
+    <div class="grid2">${ORDER.map(tcard).join("")}</div>
+  </section>`;
+}
+
+function vChar(id){
+  const c=C[id];
+  const stats=Object.entries(c.stats).map(([k,v])=>`<div class="stat"><span>${k}</span><i style="--v:${v*10}%"></i><b>${v}</b></div>`).join("");
+  return `<div class="detail-top gutter"><button class="back" data-act="back">${ICON_BACK}Cast</button><span class="mono" style="color:var(--faint)">First seen: ${c.first}</span></div>
+  <section class="stack gutter anim" style="--h:${c.h}">
+    <div class="bigwrap"><div class="tcard bigcard ${c.rarity.toLowerCase()}" style="--h:${c.h}" id="bigcard">
+      <div class="tface">
+        <div class="trow"><span class="rar">${c.rarity}</span><span>${c.entries} entries</span></div>
+        ${med(id,"xl")}
+        <div><div class="alias">${c.alias}</div><div class="real">${c.name}</div><div class="cls">${c.cls}</div></div>
+        <div class="stats">${stats}</div>
+      </div></div></div>
+    <p class="bio">${c.bio}</p>
+    <div class="block"><h3>Titles earned</h3><div class="titles">${c.titles.map(t=>`<span>${t}</span>`).join("")}</div></div>
+    <div class="block"><h3>On the record</h3>${c.quotes.map(([q,w])=>`<div class="quote"><q>${q}</q><span>${w}</span></div>`).join("")}</div>
+    <div class="block"><h3>Appears in</h3>${c.legends.map(lrow).join("")}</div>
+    <p class="footnote">This page is written by the group, not by ${c.short}. Last edited by ${c.by}, ${c.ago}.</p>
+  </section>`;
+}
+
+function lrow(id){
+  const l=L[id];
+  return `<button class="lrow" data-act="legend:${id}">${cover(l)}<span class="ltxt"><span class="ltitle">${l.title}</span><span class="lmeta">${l.date} · ${l.place}</span>${pill(l.status)}</span></button>`;
+}
+function vLegends(){
+  return `<section class="stack gutter anim">
+    <div class="eyebrow">${Object.keys(L).length} legends · 5 eras</div>
+    <h1 class="h-display">The Legends</h1>
+    <p class="lede">Every story the group has agreed is real, and a few it hasn’t.</p>
+    ${ERAS.map(e=>`<div class="era ${e.id==="now"?"now":""}">
+      <div class="era-h"><span class="mono">${e.when}</span><span class="era-name">${e.name}</span><p>${e.blurb}</p></div>
+      ${Object.keys(L).filter(k=>L[k].era===e.id).map(lrow).join("")}
+    </div>`).join("")}
+  </section>`;
+}
+
+function waveform(seed){
+  let s=seed,out="";
+  for(let i=0;i<22;i++){s=(s*9301+49297)%233280;out+=`<i style="height:${20+s/233280*80}%"></i>`;}
+  return out;
+}
+function vLegend(id){
+  const l=L[id];
+  const ev=l.ev.map(([t,lab],i)=>t==="img"
+    ? `<div class="ev"><div class="cover" style="--h1:${(l.h1+i*40)%360};--h2:${(l.h2+i*25)%360}"></div><span class="evl">${lab}</span></div>`
+    : `<div class="ev"><div class="wave">${waveform(l.h1+i*7)}</div><span class="evl">Voice note · ${lab}</span></div>`).join("");
+  const reacts=l.reacts.map(([e,n],i)=>{const on=state.reacted[id+i];return `<button class="${on?"on":""}" data-act="react:${id}:${i}" aria-pressed="${!!on}">${e}<b>${n+(on?1:0)}</b></button>`}).join("");
+  return `<div class="ld-hero">${cover(l)}<div class="detail-top gutter"><button class="back" data-act="back">${ICON_BACK}Back</button></div></div>
+  <section class="stack gutter">
+    <div class="ld-head">
+      <div class="ld-meta">${l.date} · ${l.place}</div>
+      <h1 class="ld-title">${l.title}</h1>
+      <div class="stamp st-${l.status}">${STATUS[l.status]}<small>${l.status==="contested"?"In the Canon Court":"Voted "+l.votes}</small></div>
+    </div>
+    <div class="story">${l.story.map(p=>`<p>${p}</p>`).join("")}</div>
+    <div class="block"><h3>Witnesses</h3><div class="witness">${l.cast.map(c=>`<button data-act="char:${c}">${med(c,"sm")}${C[c].alias}</button>`).join("")}</div></div>
+    <div class="block"><h3>Evidence · ${l.ev.length} items</h3><div class="evidence">${ev}</div></div>
+    <div class="block"><h3>Reactions</h3><div class="reacts">${reacts}</div></div>
+    ${l.status==="contested"?`<button class="btn-foil foil" data-act="tab:court">Go to the Canon Court</button>`:""}
+  </section>`;
+}
+
+function caseCard(id){
+  const c=CASES[id],t=tally(c);
+  const claim=(x,counter)=>`<div class="claim ${counter?"counter":""}">${med(x.who)}<div class="bubble"><small>${C[x.who].alias} ${counter?"objects":"claims"}</small>${x.text}${x.ev?`<br><span class="evchip">${x.ev}</span>`:""}</div></div>`;
+  let bottom;
+  if(c.you){
+    const v=verdict(id);
+    bottom=`<div class="verdict"><div class="stamp st-${v.s}">${v.head}</div><p>${v.text}</p></div>`;
+  }else{
+    bottom=`<div class="youvote">Voting as Mo · your vote is the last one</div>
+    <div class="vote"><button class="vbtn a" data-act="vote:${id}:a">${c.a}<small>${c.aSub}</small></button><button class="vbtn b" data-act="vote:${id}:b">${c.b}<small>${c.bSub}</small></button></div>`;
+  }
+  return `<article class="card case">
+    <div class="case-top"><span class="mono">Case ${c.no} · ${c.opened}</span>${c.you?pill(verdict(id).s):`<span class="live">Live</span>`}</div>
+    <h2>${c.title}</h2>
+    ${claim(c.claim)}${c.counter?claim(c.counter,true):""}
+    ${t.html}
+    ${bottom}
+  </article>`;
+}
+function vCourt(){
+  const mine=USER_CASES.map(u=>`<article class="card case">
+    <div class="case-top"><span class="mono">Case ${u.no} · just now</span><span class="pill st-pending">${STATUS.pending}</span></div>
+    <h2>${u.title}</h2>
+    <div class="claim">${med("mo")}<div class="bubble"><small>Pigeon · ${u.type}</small>${u.body||"No description yet."}</div></div>
+    <div class="tally"><div class="tally-bar"></div><div class="tally-legend"><span style="color:var(--faint)">Waiting for 5 votes · closes in 24h</span></div></div>
+  </article>`).join("");
+  return `<section class="stack gutter anim">
+    <div class="eyebrow">${2+USER_CASES.length} open cases · majority rules</div>
+    <h1 class="h-display">The Canon Court</h1>
+    <p class="lede">Where the group decides what really happened.</p>
+    ${mine}${caseCard("swan")}${caseCard("rename")}
+    <div class="section-h"><h2>Past rulings</h2><span>Binding forever</span></div>
+    <ul class="rulings">${RULINGS.map(([q,w,s,v])=>`<li><span class="rq">${q}<small>${w} · ${v}</small></span>${pill(s)}</li>`).join("")}</ul>
+  </section>`;
+}
+
+/* ---------- render ---------- */
+function render(resetScroll=true){
+  let html;
+  if(state.detail){const [k,id]=state.detail;html=k==="char"?vChar(id):vLegend(id);}
+  else html={home:vHome,cast:vCast,legends:vLegends,court:vCourt}[state.tab]();
+  view.innerHTML=html;
+  if(resetScroll) view.scrollTop=0;
+  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("on",b.dataset.act==="tab:"+state.tab&&!state.detail));
+  const open=Object.values(CASES).filter(c=>!c.you).length+USER_CASES.length;
+  const badge=$("#courtBadge"); badge.textContent=open; badge.hidden=!open;
+  $("#entryCount").textContent=147+USER_CASES.length;
+  bindTilt();
+}
+function bindTilt(){
+  const card=$("#bigcard"); if(!card) return;
+  card.addEventListener("pointermove",e=>{
+    const r=card.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+    card.style.setProperty("--ry",((x-.5)*18)+"deg");card.style.setProperty("--rx",((.5-y)*14)+"deg");
+    card.style.setProperty("--mx",x*100+"%");card.style.setProperty("--my",y*100+"%");
+  });
+  card.addEventListener("pointerleave",()=>{card.style.setProperty("--rx","0deg");card.style.setProperty("--ry","0deg")});
+}
+
+/* ---------- overlays ---------- */
+function toast(msg){
+  const t=document.createElement("div");t.className="toast";t.setAttribute("role","status");t.textContent=msg;
+  $("#app").appendChild(t);setTimeout(()=>t.remove(),3200);
+}
+function openAdd(){
+  overlay.innerHTML=`<div class="overlay"><div class="sheet-bg" data-act="close"></div>
+  <form class="sheet gutter" id="addForm" novalidate>
+    <div class="grab"></div>
+    <h2>Add to the lore</h2>
+    <p class="lede">It goes to the Canon Court. If the group votes it canon, it’s official.</p>
+    <div class="seg" role="radiogroup" aria-label="Type">
+      ${["Legend","Quote","Title","Evidence"].map((t,i)=>`<label><input type="radio" name="type" id="type-${t}" value="${t}" ${i?"":"checked"}><span>${t}</span></label>`).join("")}
+    </div>
+    <div class="field"><label for="lore-title">What happened?</label><input id="lore-title" maxlength="60" placeholder="e.g. The Bin Bag Costume" autocomplete="off"></div>
+    <div class="field"><label for="lore-body">Tell it properly</label><textarea id="lore-body" rows="4" placeholder="Who, where, and what went wrong."></textarea></div>
+    <div class="field"><label>Who was involved</label>
+      <div class="seg cast">${ORDER.map(id=>`<label style="--h:${C[id].h}"><input type="checkbox" id="cast-${id}" value="${id}"><span>${C[id].short}</span></label>`).join("")}</div></div>
+    <p class="err" id="addErr" hidden>Give it a name so the court knows what it’s voting on.</p>
+    <button type="submit" class="btn-foil foil">Send to the Canon Court</button>
+    <button type="button" class="btn-ghost" data-act="close">Cancel</button>
+  </form></div>`;
+  setTimeout(()=>$("#lore-title")?.focus(),50);
+  $("#addForm").addEventListener("submit",e=>{
+    e.preventDefault();
+    const title=$("#lore-title").value.trim();
+    if(!title){$("#addErr").hidden=false;$("#lore-title").focus();return;}
+    const type=document.querySelector('input[name="type"]:checked').value;
+    USER_CASES.unshift({no:String(49+USER_CASES.length).padStart(4,"0"),title,type,body:$("#lore-body").value.trim()});
+    FEED.unshift({who:"mo",html:`<b>Mo</b> sent <b>${title.replace(/</g,"&lt;")}</b> to the Canon Court`,meta:"just now",go:"tab:court"});
+    closeOverlay();state.detail=null;state.tab="court";render();
+    toast("Sent to the Canon Court. Voting closes in 24 hours.");
+  });
+}
+function closeOverlay(){overlay.innerHTML="";state.story=null;}
+
+const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+function openStory(name){state.story={name,i:0};renderStory();}
+function renderStory(){
+  const {name,i}=state.story, slides=STORIES[name], s=slides[i];
+  overlay.innerHTML=`<div class="story-v" role="dialog" aria-label="${name==="wrapped"?"Lore Wrapped":"Lore briefing"}">
+    <div class="slide gutter bg${i%4}">
+      <div class="s-k">${s.k}</div>
+      ${s.med?med(s.med,"xl"):""}
+      ${s.num?`<div class="s-num foil-text">${s.num}</div>`:""}
+      ${s.big?`<div class="s-big">${s.big}</div>`:""}
+      <div class="s-sub">${s.sub}</div>
+      ${s.cta?`<button class="btn-foil foil s-cta" data-act="close">${s.cta}</button>`:""}
+    </div>
+    <div class="tapz"><button data-act="story-prev" aria-label="Previous"></button><button data-act="story-next" aria-label="Next"></button></div>
+    <div class="bars gutter">${slides.map((_,j)=>`<span class="${j<i?"done":j===i?"active":""}"><i></i></span>`).join("")}</div>
+    <button class="s-close" data-act="close" aria-label="Close">${ICON_X}</button>
+  </div>`;
+  if(s.cta) overlay.querySelector(".tapz").style.pointerEvents="none";
+  const bar=overlay.querySelector(".bars .active i");
+  if(bar&&!reduce&&!s.cta) bar.addEventListener("animationend",()=>{if(state.story&&state.story.i===i&&state.story.name===name)storyStep(1)});
+}
+function storyStep(d){
+  const st=state.story;if(!st)return;
+  const n=st.i+d;
+  if(n<0) return;
+  if(n>=STORIES[st.name].length){closeOverlay();return;}
+  st.i=n;renderStory();
+}
+
+/* ---------- events ---------- */
+document.addEventListener("click",e=>{
+  const el=e.target.closest("[data-act]");if(!el)return;
+  const [act,a,b]=el.dataset.act.split(":");
+  switch(act){
+    case "tab": closeOverlay();state.detail=null;state.tab=a;render();break;
+    case "char": case "legend": state.detail=[act,a];render();break;
+    case "back": state.detail=null;render();break;
+    case "add": openAdd();break;
+    case "close": closeOverlay();break;
+    case "story": openStory(a);break;
+    case "story-next": storyStep(1);break;
+    case "story-prev": storyStep(-1);break;
+    case "react": state.reacted[a+b]=!state.reacted[a+b];render(false);break;
+    case "vote":{
+      CASES[a].you=b;
+      if(a==="swan"){
+        if(b==="b"){L.swan.status="noncanon";L.swan.votes="4–2";C.tom.titles[2]="Swan Challenger (Lost)";}
+        else{L.swan.votes="3–3";}
+        FEED.unshift({who:"priya",html:`The court ruled on <b>The Swan</b>: ${verdict("swan").head}`,meta:"just now",go:"legend:swan"});
+      }
+      render(false);toast(a==="swan"?"Vote cast. The court has ruled.":"Vote cast. Motion rejected.");
+      break;}
+  }
+});
+document.addEventListener("keydown",e=>{
+  if(!state.story&&!overlay.innerHTML)return;
+  if(e.key==="Escape")closeOverlay();
+  if(state.story&&e.key==="ArrowRight")storyStep(1);
+  if(state.story&&e.key==="ArrowLeft")storyStep(-1);
+});
+render();
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
