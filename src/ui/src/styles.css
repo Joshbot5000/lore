@@ -53,11 +53,12 @@ h1, h2, h3, p, ul, ol { margin: 0; padding: 0; } ul { list-style: none; }
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 30px; border: 1px solid var(--hair); background: var(--panel2); color: var(--text2); font: 500 12px var(--mono); transition: all .15s; }
 .chip:hover { border-color: var(--line2); color: var(--text); } .chip.on { color: var(--accent); border-color: var(--line2); box-shadow: 0 0 14px rgba(var(--accent-rgb), .18) inset; }
 
-.grid { position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 22px 26px; display: grid; gap: 14px; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: min-content;
+.grid { position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto; padding: 16px 22px 26px; display: grid; gap: 14px; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto 1fr; grid-auto-rows: min-content;
   grid-template-areas:
     'clock clock clock core core core core core core inbox inbox inbox'
     'weather weather weather core core core core core core tasks tasks tasks'
-    'upcoming upcoming upcoming music music music home home home money money money'
+    'upcoming upcoming upcoming core core core core core core tasks tasks tasks'
+    'music music music music home home home home money money money money'
     'notebook notebook notebook notebook notebook notebook vitals vitals vitals vitals vitals vitals'; }
 @media (max-width: 1180px) { .desk .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'core core' 'clock weather' 'tasks inbox' 'upcoming music' 'home money' 'notebook vitals'; } }
 .dock { display: none; }
@@ -133,7 +134,7 @@ input[type='range'] { -webkit-appearance: none; appearance: none; flex: 1; heigh
 .timers li svg { color: var(--accent2); }
 
 /* ---------- the core ---------- */
-.card-core { padding-bottom: 14px; border-color: var(--line2); background: linear-gradient(180deg, rgba(var(--accent-rgb), .05), transparent 40%), var(--panel); animation-delay: 0s; min-height: 560px; }
+.card-core { padding-bottom: 14px; border-color: var(--line2); background: linear-gradient(180deg, rgba(var(--accent-rgb), .05), transparent 40%), var(--panel); animation-delay: 0s; min-height: 600px; }
 .card-core::after { content: ''; position: absolute; left: 10%; right: 10%; top: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--accent), transparent); opacity: .7; }
 .state { display: inline-flex; align-items: center; gap: 7px; color: var(--text2); } .state i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
 .state.listening i, .state.thinking i { background: var(--accent2); box-shadow: 0 0 10px var(--accent2); animation: blink .6s steps(2) infinite; } .state.speaking i { animation: pulse 1s ease-in-out infinite; } @keyframes pulse { 50% { transform: scale(1.7); opacity: .5; } }
@@ -141,7 +142,7 @@ input[type='range'] { -webkit-appearance: none; appearance: none; flex: 1; heigh
 .pill:hover { color: var(--text); border-color: var(--line2); } .pill.on { color: #031018; background: var(--accent); border-color: var(--accent); box-shadow: 0 0 18px rgba(var(--accent-rgb), .5); }
 .core-stage { flex: 1; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
 .core-btn { border-radius: 50%; touch-action: none; transition: transform .25s cubic-bezier(.2, 1.4, .4, 1); } .core-btn:active { transform: scale(.96); } .core-canvas { display: block; pointer-events: none; }
-.core-hint { margin-top: -6px; }
+.core-hint { margin: -6px 0 8px; }
 .exchange { min-height: 108px; max-height: 190px; overflow-y: auto; padding: 4px 6px 10px; display: flex; flex-direction: column; gap: 8px; }
 .heard { color: var(--text3); font-size: 13.5px; display: flex; gap: 10px; align-items: baseline; user-select: text; -webkit-user-select: text; } .heard .label { flex: none; }
 .said { font: 400 19px/1.45 var(--display); letter-spacing: -.005em; user-select: text; -webkit-user-select: text; text-shadow: 0 0 26px rgba(var(--accent-rgb), .22); }
@@ -193,7 +194,7 @@ input[type='range'] { -webkit-appearance: none; appearance: none; flex: 1; heigh
 .toast { padding: 10px 16px; border-radius: 11px; background: #0b121b; border: 1px solid var(--line2); box-shadow: 0 16px 40px rgba(0, 0, 0, .6), 0 0 24px rgba(var(--accent-rgb), .15); font-size: 13.5px; animation: rise .25s; } .toast.alert { border-color: rgba(var(--accent2-rgb), .6); }
 
 /* ---------- phone ---------- */
-.phone .top { padding: 10px 14px; gap: 10px; padding-top: max(10px, env(safe-area-inset-top)); } .phone .dots, .phone .brand .label { display: none; } .phone .top-right { margin-left: auto; }
+.phone .top { padding: 10px 14px; gap: 10px; padding-top: max(10px, env(safe-area-inset-top)); } .phone .dots, .phone .brand .label, .phone .top-right > .label:not(.blink) { display: none; } .phone .brand b { white-space: nowrap; font-size: 12px; } .phone .top-right { margin-left: auto; }
 .phone .grid { display: flex; flex-direction: column; padding: 12px 12px calc(86px + env(safe-area-inset-bottom)); gap: 12px; }
 .phone.tab-core .card:not([data-tab='core']), .phone.tab-today .card:not([data-tab='today']), .phone.tab-life .card:not([data-tab='life']) { display: none; }
 .phone .card-core { flex: 1; min-height: calc(100dvh - 170px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); } .phone .card-head { flex-wrap: wrap; } .phone .said { font-size: 17.5px; } .phone .digits { font-size: 58px; }

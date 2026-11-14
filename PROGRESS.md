@@ -20,11 +20,17 @@ Wants it working by 12pm UK time on 14 Nov.
   Hark (the Otter rebuild) is on the same branch name in Joshbot5000/pdf-reader.
 - Test models are in /home/user/hark/scratch/models (re-download from Hugging Face if the container was reset).
 
-## Status
-- [ ] scaffold, brain server, store
-- [ ] llm worker with tool calling; agent + tools; memory
-- [ ] speech in / voice out
-- [ ] dashboard UI (desktop + phone)
-- [ ] Electron shell, installer, phone pairing
-- [ ] Mac integrations
-- [ ] end-to-end test run, README, push
+## Status (updated 14 Nov, ~09:00 UK)
+- [x] scaffold, brain server, store
+- [x] llm worker with tool calling; agent + tools; memory (tested headless with qwen-2b and qwen-4b)
+- [x] speech in / voice out (tests/voice.mjs: transcript, wake-word gating, spoken reply)
+- [x] dashboard UI, desktop + phone (tests/look.mjs screenshots, no console errors)
+- [x] Electron shell first-run flow (tests/shell.mjs), installer script, packaging config
+- [x] README, unit tests
+- [ ] NOT yet run on a real Mac: AppleScript integrations, permission prompts, Metal. Live weather / web search
+      could not be reached from the build container (network policy), only their parsers are tested.
+- [ ] Ideas not done: menu-bar icon, Home Assistant, IMAP mail, Hark library as a Jarvis knowledge source.
+
+## How to run the tests here
+JARVIS_FAKE_MAC=1 JARVIS_DATA_DIR=/tmp/jv-data JARVIS_MODELS_DIR=/home/user/hark/scratch/models node out/main/headless.js
+then tests/chat.mjs, tests/voice.mjs, tests/look.mjs against the printed address; tests/shell.mjs under xvfb-run.

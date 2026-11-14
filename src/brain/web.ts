@@ -10,13 +10,17 @@ export type Hit = { title: string; snippet: string; url: string };
 
 export function parseDuck(html: string): Hit[] {
   const out: Hit[] = [];
-  const re = /<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|td|div)>)?/g;
-  for (let m: RegExpExecArray | null; (m = re.exec(html)) && out.length < 6; ) {
-    let url = m[1].replace(/&amp;/g, '&');
+  // Each result starts at its title link; the snippet, if any, follows before the next title.
+  const chunks = html.split(/(?=<a[^>]+class="[^"]*result__a)/).slice(1);
+  for (const chunk of chunks.slice(0, 6)) {
+    const link = chunk.match(/^<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!link) continue;
+    let url = link[1].replace(/&amp;/g, '&');
     const redirect = url.match(/[?&]uddg=([^&]+)/);
     if (redirect) url = decodeURIComponent(redirect[1]);
     if (url.startsWith('//')) url = 'https:' + url;
-    out.push({ title: strip(m[2]), snippet: strip(m[3] ?? ''), url });
+    const snip = chunk.match(/class="[^"]*result__snippet[^"]*"[^>]*>([\s\S]*?)<\/(?:a|td|div|span)>/);
+    out.push({ title: strip(link[2]), snippet: strip(snip?.[1] ?? ''), url });
   }
   return out;
 }

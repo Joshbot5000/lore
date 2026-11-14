@@ -10,6 +10,8 @@ let llama: any = null;
 let model: any = null;
 let context: any = null;
 let sequence: any = null;
+let sideContext: any = null;
+let sideSequence: any = null;
 let loadedPath = '';
 let chain: Promise<unknown> = Promise.resolve();
 const aborts = new Map<string, AbortController>();
@@ -24,9 +26,11 @@ const queued = <T>(fn: () => Promise<T>): Promise<T> => {
 
 type Turn = { role: 'user' | 'assistant'; text: string };
 type ToolDef = { name: string; description: string; params?: Record<string, unknown> };
-type GenParams = { streamId: string; system: string; history?: Turn[]; prompt: string; maxTokens?: number; temperature?: number; tools?: ToolDef[]; prefix?: string };
+type GenParams = { streamId: string; system: string; history?: Turn[]; prompt: string; maxTokens?: number; temperature?: number; tools?: ToolDef[]; prefix?: string; side?: boolean };
 
 async function unload(): Promise<void> {
+  await sideContext?.dispose?.().catch(() => undefined);
+  sideContext = sideSequence = null;
   await context?.dispose?.().catch(() => undefined);
   await model?.dispose?.().catch(() => undefined);
   context = model = sequence = null;
@@ -60,7 +64,17 @@ serve({
     return queued(async () => {
       if (!model) throw new Error('Language model is not loaded');
       if (abort.signal.aborted) return '';
-      const session = new lib.LlamaChatSession({ contextSequence: sequence, systemPrompt: p.system, autoDisposeSequence: false });
+      let seq = sequence;
+      if (p.side) {
+        // Background jobs (such as noting memories) get their own small context, so the main
+        // conversation's cached prompt is not thrown away between turns.
+        if (!sideSequence) {
+          sideContext = await model.createContext({ contextSize: { min: 1024, max: 2048 } });
+          sideSequence = sideContext.getSequence();
+        }
+        seq = sideSequence;
+      }
+      const session = new lib.LlamaChatSession({ contextSequence: seq, systemPrompt: p.system, autoDisposeSequence: false });
       try {
         if (p.history?.length) {
           session.setChatHistory([

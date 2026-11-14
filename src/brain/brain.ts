@@ -235,7 +235,8 @@ export class Brain extends EventEmitter {
       this.setIntegration('weather', 'ok');
       this.patch({ weather: this.weather });
     } catch (err) {
-      this.setIntegration('weather', 'error', (err as Error).message);
+      const msg = (err as Error).message;
+      this.setIntegration('weather', 'error', /fetch failed|ENOTFOUND|network|ERR_/i.test(msg) ? "can't reach the weather service (offline?)" : msg);
     }
   }
 
@@ -473,14 +474,17 @@ export class Brain extends EventEmitter {
   /** After a turn: quietly note anything lasting the user revealed about themselves. */
   private async learn(text: string): Promise<void> {
     if (text.length < 12 || !/\b(i|i'm|im|i've|my|mine|me|we|our)\b/i.test(text) || /\?\s*$/.test(text.trim())) return;
+    // Requests are not facts.
+    if (/^(please |can you |could you )?(remind|add|set|play|pause|open|turn|run|track|note|schedule|put|start|stop|skip|show|tell|give|find|search|what|when|who|where|how|why)\b/i.test(text.trim())) return;
     const name = this.settings.userName || 'The user';
     try {
       const raw = await this.llm.call<string>('generate', {
         streamId: `learn${++this.turnSeq}`,
         system: 'You maintain a personal assistant\'s long-term memory. You are precise and never invent details.',
-        prompt: `${name} said: "${text}"\n\nList any lasting personal facts worth remembering about ${name} from this message: preferences, people in their life, places, routines, work or study, goals, important dates. Ignore one-off requests, questions and small talk. Write each fact as one short sentence starting with "${name}". If there is nothing lasting, reply with exactly NONE.`,
+        prompt: `${name} said: "${text}"\n\nList any lasting personal facts worth remembering about ${name} from this message: preferences, people in their life, places, routines, work or study, goals, important dates. Ignore one-off requests, questions, small talk, things they are doing right now and tasks they have finished. Write each fact as one short sentence starting with "${name}". If there is nothing lasting, reply with exactly NONE.`,
         maxTokens: 120,
         temperature: 0.1,
+        side: true,
       });
       if (/^\s*none\b/i.test(raw)) return;
       for (const line of raw.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter((l) => l.length > 8 && l.length < 200 && l.toLowerCase().startsWith(name.toLowerCase().split(' ')[0])).slice(0, 3)) {
@@ -594,7 +598,7 @@ export class Brain extends EventEmitter {
           } as Tool]
         : []),
       {
-        name: 'open', description: 'Open an app or a website on the Mac.', params: str({ target: 'App name (e.g. "Safari") or a full https URL' }), label: ({ target }) => `Opened ${target}`,
+        name: 'open_app_or_website', description: 'Open an app or a website on the Mac.', params: str({ target: 'App name (e.g. "Safari") or a full https URL' }), label: ({ target }) => `Opened ${target}`,
         run: async ({ target }) => {
           const t = String(target);
           if (/^https?:\/\//i.test(t) || /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(t)) await mac.openUrl(/^https?:/i.test(t) ? t : `https://${t}`);
@@ -648,12 +652,13 @@ export class Brain extends EventEmitter {
     const s = this.settings;
     const now = new Date();
     const L: string[] = [`Now: ${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.`];
+    L.push(`You are talking to: ${s.userName || 'the user'}${s.place ? `, who lives in ${s.place}` : ''}.`);
     if (this.weather) L.push(`Weather: ${weatherSentence(this.weather)}.`);
     const evs = this.events.filter((e) => e.end > now.getTime()).slice(0, 6);
     L.push(evs.length ? `Calendar: ${evs.map((e) => `${e.title} (${describeWhen(e.start)})`).join('; ')}.` : 'Calendar: nothing coming up.');
     const open = this.store.get('tasks').filter((t) => !t.done).slice(0, 10);
     L.push(open.length ? `To-do list: ${open.map((t) => t.title + (t.due ? ` (due ${describeWhen(t.due)})` : '')).join('; ')}.` : 'To-do list: empty.');
-    if (this.integrations.mail.state === 'ok') L.push(this.unread ? `Unread email (${this.unread}): ${this.mail.slice(0, 5).map((m) => `${m.from}: “${m.subject}”`).join('; ')}.` : 'No unread email.');
+    if (this.integrations.mail.state === 'ok') L.push(this.unread ? `Inbox: ${this.unread} unread emails. ${this.mail.slice(0, 5).map((m) => `From ${m.from}, subject “${m.subject}”`).join('. ')}.` : 'Inbox: no unread emails.');
     if (this.music?.title) L.push(`Music: ${this.music.state} “${this.music.title}” by ${this.music.artist}.`);
     if (this.timers.length) L.push(`Timers: ${this.timers.map((t) => `${t.label || 'timer'} with ${Math.ceil((t.endsAt - now.getTime()) / 6e4)} min left`).join('; ')}.`);
     const money = this.store.get('money');
@@ -673,7 +678,7 @@ export class Brain extends EventEmitter {
 
 Your replies are spoken aloud, so write the way a person talks: one to three short sentences, plain words, no lists, no markdown, no emoji. Give the answer first. Never read out raw data such as URLs or IDs.
 
-Each request comes with a <context> block showing the time, weather, calendar, to-do list, email, music and what you remember. Answer from it directly when you can. When the user asks you to do something, use a tool, then confirm in a few words what you did. Use web_search for facts you are not sure of. If something cannot be done, say so plainly. Never claim to have done something unless a tool confirmed it.`;
+Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. If they ask for two things, call a tool for each one. Use web_search for facts you are not sure of. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
   }
 
   /** Instant answers for the simplest commands: no need to wake the language model. */
@@ -700,6 +705,39 @@ Each request comes with a <context> block showing the time, weather, calendar, t
       [/^(next|skip)( song| track| this| it)?$/, 'next', 'Skipped.'], [/^(previous|last|go back)( song| track)?$/, 'previous', 'Going back one.'],
     ];
     for (const [re, action, reply] of music) if (re.test(t)) return { reply, tool: await use('music', { action }) };
+
+    // The everyday commands are handled directly, so they are instant and never depend on the model's mood.
+    const raw = text.trim().replace(new RegExp(`^(hey |ok |okay )?${s.assistantName}[,.!]?\\s*`, 'i'), '').replace(/^(please |can you |could you |will you )/i, '').replace(/[.!]+$/, '');
+    const remind = raw.match(/^remind me (?:to |about |that )(.+)$/i);
+    if (remind) {
+      // Find where the task ends and the time begins: "call the dentist | tomorrow at 9am".
+      const words = remind[1].split(/\s+/);
+      let title = remind[1], when = '';
+      for (let i = 1; i < words.length; i++) {
+        const tail = words.slice(i).join(' ');
+        if (/^(tomorrow|today|tonight|on|at|in|next|this|by|every|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(tail) && parseWhen(tail)) {
+          title = words.slice(0, i).join(' ');
+          when = tail;
+          break;
+        }
+      }
+      // Also "remind me tomorrow at 9 to call the dentist".
+      const lead = remind[1].match(/^(.+?) to (.+)$/i);
+      if (!when && lead && parseWhen(lead[1])) (when = lead[1]), (title = lead[2]);
+      const tool = await use('add_task', { title, when });
+      const due = when ? parseWhen(when) : null;
+      return { reply: due ? `I'll remind you ${describeWhen(due)}.` : "It's on your list.", tool };
+    }
+    const todo = raw.match(/^(?:add|put) (.+?) (?:to|on) (?:my |the )?(?:to-?do(?: list)?|list|tasks?)$/i);
+    if (todo) return { reply: "It's on your list.", tool: await use('add_task', { title: todo[1] }) };
+    const note = raw.match(/^(?:make |take |add |save )?(?:a )?note(?: down)?(?: that| to self| saying)?[:,]? (.+)$/i);
+    if (note) return { reply: 'Noted.', tool: await use('add_note', { text: note[1].replace(/^./, (c) => c.toUpperCase()) }) };
+    const rem = raw.match(/^remember (?:that )?(.+)$/i);
+    if (rem) {
+      const who = s.userName || 'The user';
+      const fact = rem[1].replace(/\bmy\b/gi, `${who}'s`).replace(/\bi am\b|\bi'm\b/gi, `${who} is`).replace(/\bi have\b|\bi've\b/gi, `${who} has`).replace(/\bi\b/g, who).replace(/\bme\b/gi, who);
+      return { reply: "I'll remember that.", tool: await use('remember', { fact: fact.replace(/^./, (c) => c.toUpperCase()) + '.' }) };
+    }
     return null;
   }
 
@@ -833,7 +871,7 @@ Each request comes with a <context> block showing the time, weather, calendar, t
           this.llm.off('chunk', onChunk);
           this.llm.off('tool', onTool);
         }
-        reply = reply.trim() || (uses.some((u) => u.ok) ? 'Done.' : "I'm not sure what to say to that.");
+        reply = reply.replace(/\s*\n+\s*/g, ' ').trim() || (uses.some((u) => u.ok) ? 'Done.' : "I'm not sure what to say to that.");
         if (speak) void this.speakOut(turn, pending.trim() ? pending : uses.length && !reply.includes(pending) ? reply : '', true);
       }
     } catch (err) {
@@ -848,7 +886,8 @@ Each request comes with a <context> block showing the time, weather, calendar, t
     this.push({ type: 'say', turn, done: true, state: 'idle' });
     this.patch({ chat: chat.slice(-60) });
     if (this.activeTurn === turn) this.activeTurn = speak ? turn : '';
-    void this.learn(text);
+    // Commands are not facts about the person: only learn from conversation (or an explicit "remember").
+    if (!uses.length || /\bremember\b/i.test(text)) void this.learn(text);
     return msg;
   }
 

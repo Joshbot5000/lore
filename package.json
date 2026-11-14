@@ -43,5 +43,41 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"
+  },
+  "build": {
+    "appId": "com.joshbot5000.jarvis",
+    "productName": "Jarvis",
+    "asar": false,
+    "npmRebuild": false,
+    "files": [
+      "out/**",
+      "resources/**",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "resources/icon.png",
+      "identity": null,
+      "hardenedRuntime": false,
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Jarvis listens through the microphone when you talk to him. Audio is processed on this Mac and never uploaded.",
+        "NSAppleEventsUsageDescription": "Jarvis controls apps such as Spotify, Mail and Calendar when you ask him to.",
+        "NSCalendarsUsageDescription": "Jarvis reads your calendar to tell you what is coming up.",
+        "NSLocalNetworkUsageDescription": "Jarvis lets your phone connect to this Mac on your home network."
+      }
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Utility"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "resources/icon.png"
+    }
   }
 }
