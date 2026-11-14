@@ -223,3 +223,10 @@ input[type='range'] { -webkit-appearance: none; appearance: none; flex: 1; heigh
 .routine { border: 1px solid var(--hair); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--panel2); }
 .routine-head { display: flex; align-items: center; gap: 8px; } .routine-head input { flex: 1; min-width: 0; background: none; border: 0; font-weight: 600; font-size: 14px; }
 .routine textarea { width: 100%; min-height: 62px; resize: vertical; background: none; border: 1px dashed var(--hair); border-radius: 8px; padding: 7px 9px; font: 13px/1.5 var(--sans); color: var(--text2); } .routine textarea:focus { border-color: var(--line2); outline: none; }
+
+.timing { font-size: 10.5px; color: var(--text3); letter-spacing: .04em; margin-top: 2px; opacity: .8; }
+
+.tiles button.lit { border-color: rgba(var(--accent-rgb), .55); color: var(--text); background: rgba(var(--accent-rgb), .12); box-shadow: 0 0 18px rgba(var(--accent-rgb), .18) inset; }
+.tiles button em { font: 500 11px var(--mono); font-style: normal; color: var(--text3); flex: none; }
+.field.stack .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; width: 100%; } .field.stack .row .search { flex: 1; min-width: 150px; }
+.field i.bad { color: var(--alert); }

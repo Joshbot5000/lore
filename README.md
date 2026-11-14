@@ -15,9 +15,9 @@ no subscription, no usage limits, and nothing you say is uploaded.
 | **Daily briefing** | “Brief me”: weather, today's calendar, what is due, unread mail, bills about to go out. Built from real data, never invented |
 | **Reminders and tasks** | “Remind me to call the dentist tomorrow at 9.” Spoken reminder and notification when it is due. Now / Week / Later views |
 | **Calendar** | Apple Calendar plus any calendar's private ICS link (Google, iCloud, Outlook), with repeating events. “Schedule dinner on Friday at 7” |
-| **Inbox** | Unread mail from Apple Mail; “who emailed me?” |
-| **Music** | Spotify or Apple Music: what's playing, play, pause, skip, volume, by button or voice |
-| **Home** | Your Shortcuts as one-tap tiles and voice commands (“run movie night”), which is how HomeKit lights and scenes are controlled |
+| **Inbox** | Unread mail from Apple Mail, or straight from Gmail, iCloud, Yahoo, Fastmail or any IMAP mailbox with an app password (Settings → Mail accounts). Read-only: nothing is marked as read. “Do I have any email?” |
+| **Music** | Spotify or Apple Music. “What song is this?” “Play Blinding Lights by The Weeknd.” “Play some Fleetwood Mac.” “Play the album Rumours.” Plus play, pause, skip and volume, by button or voice |
+| **Home** | **Home Assistant**: lights, switches, heating, scenes, blinds and locks as live tiles and by voice (“turn off the kitchen lights”, “set the lamp to 40 percent”, “set the heating to 20”, “is the front door locked?”). Connect it in Settings with its address and a long-lived token. Also your **Shortcuts** as tiles and voice commands, which is how HomeKit scenes are reached |
 | **Money** | Bills, subscriptions and income: monthly outgoings, what's left, and a warning before a bill is due |
 | **Notebook, timers** | “Note that the gate code is 4417.” “Set a pasta timer for 10 minutes.” |
 | **Mac control** | Open apps and sites, set or mute volume, lock the screen, toggle dark mode |

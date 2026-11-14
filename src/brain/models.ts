@@ -32,9 +32,9 @@ export const CATALOG: Entry[] = [
     files: [...small(WHISPER_FILES), ['onnx/encoder_model_quantized.onnx', 92.2e6], ['onnx/decoder_model_merged_quantized.onnx', 156.8e6]],
   },
   {
-    id: 'voice', kind: 'voice', name: 'Natural voice', blurb: 'Kokoro neural speech: ten voices, British and American.',
+    id: 'voice', kind: 'voice', name: 'Natural voice', blurb: 'Kokoro neural speech at full quality: ten voices, British and American.',
     repo: 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    files: [...small(['config.json', 'tokenizer.json', 'tokenizer_config.json']), ['onnx/model_quantized.onnx', 92.4e6]],
+    files: [...small(['config.json', 'tokenizer.json', 'tokenizer_config.json']), ['onnx/model.onnx', 325.5e6]],
   },
   {
     id: 'embed', kind: 'support', name: 'Memory index', blurb: 'Lets Jarvis recall the right memory by meaning.',

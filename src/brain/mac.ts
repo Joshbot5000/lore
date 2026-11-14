@@ -10,6 +10,8 @@ import type { CalEvent, Mail, NowPlaying } from '../shared/types';
 export type MacBridge = {
   real: boolean;
   music(app: 'Spotify' | 'Music'): Promise<NowPlaying | null>;
+  /** Play a specific thing: a spotify: address in Spotify, or something from the library by name in Music. True if it started. */
+  playMusic(app: 'Spotify' | 'Music', what: string): Promise<boolean>;
   musicControl(app: 'Spotify' | 'Music', action: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'volume' | 'search', value?: string | number): Promise<void>;
   mail(): Promise<{ unread: number; items: Mail[] } | null>;
   calendar(days: number): Promise<CalEvent[] | null>;
@@ -40,13 +42,17 @@ export const realMac: MacBridge = {
   async music(app) {
     const track =
       app === 'Spotify'
-        ? `(name of t) & f & (artist of t) & f & (album of t) & f & (artwork url of t) & f & (player position) & f & ((duration of t) / 1000) & f & (sound volume)`
+        ? `(name of t) & f & (artist of t) & f & (album of t) & f & art & f & (player position) & f & ((duration of t) / 1000) & f & (sound volume)`
         : `(name of t) & f & (artist of t) & f & (album of t) & f & "" & f & (player position) & f & (duration of t) & f & (sound volume)`;
     const out = await osa(`${SEP}if application ${q(app)} is running then
   tell application ${q(app)}
     set st to (player state as string)
     if st is "stopped" then return "stopped"
     set t to current track
+    set art to ""
+    try
+      set art to (artwork url of t) as string
+    end try
     return st & f & ${track}
   end tell
 else
@@ -56,6 +62,29 @@ end if`);
     if (out === 'stopped') return { app, state: 'stopped' };
     const [st, title, artist, album, art, pos, dur, vol] = out.split(F);
     return { app, state: st === 'playing' ? 'playing' : 'paused', title, artist, album, art: art || undefined, position: parseFloat(pos.replace(',', '.')) || 0, duration: parseFloat(dur.replace(',', '.')) || 0, volume: parseInt(vol, 10) || 0 };
+  },
+
+  async playMusic(app, what) {
+    if (app === 'Spotify') {
+      await osa(`tell application "Spotify" to play track ${q(what)}`);
+      return true;
+    }
+    // Apple Music: a playlist of that name first, then any song, album or artist match in the library.
+    const out = await osa(`tell application "Music"
+  try
+    play (first playlist whose name contains ${q(what)})
+    return "ok"
+  end try
+  try
+    set hits to (search library playlist 1 for ${q(what)})
+    if (count of hits) > 0 then
+      play item 1 of hits
+      return "ok"
+    end if
+  end try
+  return "none"
+end tell`, 20000);
+    return out === 'ok';
   },
 
   async musicControl(app, action, value) {
@@ -166,6 +195,13 @@ export function fakeMac(): MacBridge {
   return {
     real: false,
     music: async (app) => ({ app, state, title: tracks[i][0], artist: tracks[i][1], album: tracks[i][2], position: state === 'playing' ? ((now() - started) / 1000) % 240 : 42, duration: 240, volume }),
+    async playMusic(_app, what) {
+      tracks.push([what.startsWith('spotify:') ? `Played ${what}` : what, 'Test artist', 'Test album']);
+      i = tracks.length - 1;
+      state = 'playing';
+      started = now();
+      return true;
+    },
     async musicControl(_app, action, value) {
       if (action === 'play') state = 'playing';
       else if (action === 'pause') state = 'paused';

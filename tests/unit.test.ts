@@ -196,3 +196,50 @@ describe('recognising a question about a recording', () => {
     expect(namesRecording(recs, 'call my landlord')).toBe(false);
   });
 });
+
+import { matchEntities, parseHomeCommand, type HaEntity } from '../src/brain/ha';
+import { musicRequest, spotifyUri } from '../src/brain/web';
+describe('home commands', () => {
+  const e = (id: string, name: string, state = 'off', extra: Partial<HaEntity> = {}): HaEntity => ({ id, name, domain: id.split('.')[0], state, ...extra });
+  const home = [e('light.kitchen_ceiling', 'Kitchen ceiling'), e('light.kitchen_counter', 'Kitchen counter'), e('light.lamp', 'Lamp', 'on', { brightness: 60 }), e('light.bedroom', 'Bedroom light'), e('switch.kitchen_kettle', 'Kitchen kettle'),
+    e('scene.movie_night', 'Movie night'), e('climate.heating', 'Heating', 'heat', { temperature: 19, current: 18.4 }), e('cover.blinds', 'Living room blinds', 'open'), e('lock.front_door', 'Front door', 'locked')];
+  const ids = (t: string) => { const c = parseHomeCommand(t, home); return c && 'targets' in c ? `${c.domain}.${c.service}:${c.targets.map((x) => x.id.split('.')[1]).join(',')}${c.data ? ':' + JSON.stringify(c.data) : ''}` : c && 'answer' in c ? c.answer : null; };
+  it('turns things on and off', () => {
+    expect(ids('turn on the kitchen lights')).toBe('homeassistant.turn_on:kitchen_ceiling,kitchen_counter');
+    expect(ids('turn the lamp off')).toBe('homeassistant.turn_off:lamp');
+    expect(ids('switch off the kitchen kettle')).toBe('homeassistant.turn_off:kitchen_kettle');
+    expect(ids('turn off all the lights')).toBe('homeassistant.turn_off:kitchen_ceiling,kitchen_counter,lamp,bedroom');
+    expect(ids('bedroom light on')).toBe('homeassistant.turn_on:bedroom');
+  });
+  it('handles brightness, heating, scenes, blinds and locks', () => {
+    expect(ids('dim the lamp to 30 percent')).toBe('light.turn_on:lamp:{"brightness_pct":30}');
+    expect(ids('set the heating to 21 degrees')).toBe('climate.set_temperature:heating:{"temperature":21}');
+    expect(ids('activate movie night')).toBe('scene.turn_on:movie_night');
+    expect(ids('close the living room blinds')).toBe('cover.close_cover:blinds');
+    expect(ids('unlock the front door')).toBe('lock.unlock:front_door');
+  });
+  it('answers questions about the home', () => {
+    expect(ids('is the lamp on')).toBe('Lamp is on, at 60 percent.');
+    expect(ids("what's the temperature")).toBe('Heating is at 18.4 degrees, set to 19.');
+  });
+  it('leaves everything else alone', () => {
+    for (const t of ['turn off the music', 'set a timer for 10 minutes', 'turn up the volume', 'open spotify', 'set the volume to 30', 'turn on do not disturb', 'what time is it', 'remind me to lock the front door at 9']) expect(parseHomeCommand(t, home)).toBeNull();
+    expect(matchEntities(home, 'garage')).toEqual([]);
+  });
+});
+describe('music requests', () => {
+  it('works out what is being asked for', () => {
+    expect(musicRequest('Blinding Lights by The Weeknd')).toEqual({ query: 'Blinding Lights by The Weeknd', kind: 'track' });
+    expect(musicRequest('some Fleetwood Mac')).toEqual({ query: 'Fleetwood Mac', kind: 'artist' });
+    expect(musicRequest('the album Rumours')).toEqual({ query: 'Rumours', kind: 'album' });
+    expect(musicRequest('my deep focus playlist on spotify')).toEqual({ query: 'deep focus', kind: 'playlist' });
+    expect(musicRequest('bohemian rhapsody')).toEqual({ query: 'bohemian rhapsody', kind: null });
+  });
+  it('picks the right Spotify address from search results', () => {
+    const hits = [{ title: 'Rumours - Album by Fleetwood Mac | Spotify', snippet: '', url: 'https://open.spotify.com/album/1bt6q2SruMsBtcerNVtpZB' }, { title: 'Dreams - song and lyrics by Fleetwood Mac | Spotify', snippet: '', url: 'https://open.spotify.com/intl-de/track/0ofHAoxe9vBkTCp2UQIavz?si=x' }, { title: 'Something else', snippet: '', url: 'https://example.com/track/abc' }];
+    expect(spotifyUri(hits, null)).toMatchObject({ uri: 'spotify:track:0ofHAoxe9vBkTCp2UQIavz', title: 'Dreams' });
+    expect(spotifyUri(hits, 'album')?.uri).toBe('spotify:album:1bt6q2SruMsBtcerNVtpZB');
+    expect(spotifyUri(hits, 'playlist')?.uri).toBe('spotify:track:0ofHAoxe9vBkTCp2UQIavz');
+    expect(spotifyUri([hits[2]], null)).toBeNull();
+  });
+});

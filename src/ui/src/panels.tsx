@@ -106,6 +106,9 @@ export function SettingsPanel() {
         </div>
       )}
 
+      <HomeAssistantSettings />
+      <MailAccounts />
+
       <h3>Routines</h3>
       <p className="lead">Say a routine's name and I run its steps in order. Each line is something you could say to me; “briefing” and “evening review” work too.</p>
       <Routines />
@@ -133,6 +136,84 @@ export function SettingsPanel() {
         <button className="btn danger" onClick={() => confirm('Clear the whole conversation log?') && act('clearChat')}>Clear chat log</button>
       </div>
     </Drawer>
+  );
+}
+
+function HomeAssistantSettings() {
+  const s = useSnap((x) => x.settings);
+  const home = useSnap((x) => x.integrations.home);
+  const [url, setUrl] = useState(s.haUrl);
+  const [token, setToken] = useState('');
+  const [msg, setMsg] = useState('');
+  const [all, setAll] = useState<{ id: string; name: string; domain: string }[]>([]);
+  useEffect(() => void (s.haUrl ? call<typeof all>('allHaEntities').then(setAll).catch(() => undefined) : setAll([])), [s.haUrl, home.detail]);
+  const connect = async () => {
+    setMsg('Connecting…');
+    try {
+      const r = await call<{ devices: number }>('saveHomeAssistant', { url, token });
+      setToken('');
+      setMsg(url.trim() ? `Connected: ${r.devices} devices found.` : 'Disconnected.');
+    } catch (e) {
+      setMsg(`Couldn't connect: ${(e as Error).message}.`);
+    }
+  };
+  return (
+    <div className="field stack">
+      <span><b>Home Assistant</b><i>Control lights, heating, scenes and switches by voice or from the Home card. In Home Assistant, open your profile → Security → Long-lived access tokens → Create token, and paste it here. It is stored only on this Mac.</i></span>
+      <div className="row">
+        <input className="search" value={url} placeholder="http://homeassistant.local:8123" spellCheck={false} onChange={(e) => setUrl(e.target.value)} />
+        <input className="search" type="password" value={token} placeholder={s.haUrl ? 'Token saved (paste to replace)' : 'Access token'} onChange={(e) => setToken(e.target.value)} />
+        <button className="btn small" onClick={() => void connect()}>{s.haUrl && !url.trim() ? 'Disconnect' : 'Connect'}</button>
+      </div>
+      {(msg || (s.haUrl && home.detail)) && <i className={/Couldn't|can't|rejected/.test(msg || home.detail || '') ? 'bad' : ''}>{msg || home.detail}</i>}
+      {all.length > 0 && (
+        <>
+          <i>Pick what appears on the Home card. None picked shows the first eight. Everything can be controlled by voice either way: “turn off the kitchen lights”, “set the heating to 20”.</i>
+          <div className="chips">{all.slice(0, 60).map((e) => <button key={e.id} className={s.haEntities.includes(e.id) ? 'on' : ''} onClick={() => save({ haEntities: s.haEntities.includes(e.id) ? s.haEntities.filter((x) => x !== e.id) : [...s.haEntities, e.id] })}>{e.name}</button>)}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const MAIL_KINDS: [string, string, string][] = [
+  ['gmail', 'Gmail', 'Use an app password, not your normal one: turn on 2-Step Verification, then create one at myaccount.google.com/apppasswords.'],
+  ['icloud', 'iCloud', 'Use an app-specific password from account.apple.com → Sign-In and Security.'],
+  ['yahoo', 'Yahoo', 'Use an app password from Yahoo Account Security.'],
+  ['fastmail', 'Fastmail', 'Use an app password from Settings → Privacy & Security.'],
+  ['other', 'Other', "Enter your provider's IMAP server. Outlook.com and Hotmail are not supported: Microsoft only allows sign-in through its own apps."],
+];
+
+function MailAccounts() {
+  const accounts = useSnap((x) => x.settings.mailAccounts);
+  const mail = useSnap((x) => x.integrations.mail);
+  const [f, setF] = useState({ preset: 'gmail', host: '', user: '', pass: '' });
+  const [msg, setMsg] = useState('');
+  const add = async () => {
+    setMsg('Checking…');
+    try {
+      const r = await call<{ unread: number }>('saveMailAccount', f);
+      setF({ ...f, user: '', pass: '' });
+      setMsg(`Connected: ${r.unread} unread.`);
+    } catch (e) {
+      setMsg(`Couldn't sign in: ${(e as Error).message}.`);
+    }
+  };
+  return (
+    <div className="field stack">
+      <span><b>Mail accounts</b><i>See unread mail from Gmail, iCloud, Yahoo or any IMAP mailbox without the Mail app. I only read the inbox; nothing is marked as read or changed. The password is stored only on this Mac.</i></span>
+      {accounts.map((a) => <div className="row" key={a.id}><span className="grow">{a.label} <i>· {a.host}</i></span><button className="ghost" title="Remove" onClick={() => confirm(`Remove ${a.label}?`) && act('deleteMailAccount', { id: a.id })}><Trash2 size={14} /></button></div>)}
+      <div className="row">
+        <div className="seg">{MAIL_KINDS.map(([id, name]) => <button key={id} className={f.preset === id ? 'on' : ''} onClick={() => setF({ ...f, preset: id })}>{name}</button>)}</div>
+      </div>
+      <div className="row">
+        {f.preset === 'other' && <input className="search" value={f.host} placeholder="imap.example.com" spellCheck={false} onChange={(e) => setF({ ...f, host: e.target.value })} />}
+        <input className="search" value={f.user} placeholder="you@example.com" spellCheck={false} autoCapitalize="off" onChange={(e) => setF({ ...f, user: e.target.value })} />
+        <input className="search" type="password" value={f.pass} placeholder="App password" onChange={(e) => setF({ ...f, pass: e.target.value })} onKeyDown={(e) => e.key === 'Enter' && void add()} />
+        <button className="btn small" onClick={() => void add()}>Add</button>
+      </div>
+      <i className={/Couldn't/.test(msg) || (!msg && mail.state === 'error') ? 'bad' : ''}>{msg || (mail.state === 'error' && mail.detail) || MAIL_KINDS.find((k) => k[0] === f.preset)![2]}</i>
+    </div>
   );
 }
 

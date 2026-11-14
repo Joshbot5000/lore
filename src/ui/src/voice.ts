@@ -54,7 +54,7 @@ function settle(): void {
   if (get().mode === 'speaking') set({ mode: 'idle' });
 }
 
-function playPcm(rate: number, b64: string): void {
+function playPcm(rate: number, b64: string, gap = 60): void {
   const c = audio();
   const bin = atob(b64);
   const n = bin.length >> 1;
@@ -68,8 +68,9 @@ function playPcm(rate: number, b64: string): void {
   const src = c.createBufferSource();
   src.buffer = ab;
   src.connect(analyser!);
-  const at = Math.max(c.currentTime + 0.03, playHead);
-  playHead = at + ab.duration + 0.06;
+  const at = Math.max(c.currentTime + 0.015, playHead);
+  // The pause after this clip: a breath after a sentence, barely anything inside one.
+  playHead = at + ab.duration + gap / 1000;
   playing++;
   set({ mode: 'speaking' });
   src.onended = () => {
@@ -114,7 +115,7 @@ export function initVoice(): void {
       }
       if (p.wav) {
         const i = p.wav.indexOf(':');
-        playPcm(+p.wav.slice(0, i), p.wav.slice(i + 1));
+        playPcm(+p.wav.slice(0, i), p.wav.slice(i + 1), p.gap);
       } else if (p.last) setTimeout(settle, 50);
     } else if (p.type === 'say' && p.done) {
       const s = get();
@@ -173,11 +174,34 @@ function onAudio(chunk: Float32Array): void {
   if (held) return void held.push(chunk);
   if (!seg) return;
   // Don't listen to our own voice coming out of the speakers.
-  if (playing > 0 || get().mode === 'thinking') return void (seg = new Segmenter({ maxLen: 14, minSilence: 0.7 }));
+  if (playing > 0 || get().mode === 'thinking') return void (seg = new Segmenter({ maxLen: 14, minSilence: 0.55 }));
   for (const s of seg.push(chunk)) if (s.end - s.start >= 0.5) void send(s.pcm, Date.now() > openUntil);
 }
 
+/** A soft two-note chime the instant you stop talking, so you know you were heard before the reply arrives. */
+function blip(): void {
+  try {
+    const c = audio();
+    const t = c.currentTime;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.045, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    g.connect(c.destination);
+    const o = c.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(740, t);
+    o.frequency.setValueAtTime(988, t + 0.07);
+    o.connect(g);
+    o.start(t);
+    o.stop(t + 0.18);
+  } catch {
+    /* sound is a nicety */
+  }
+}
+
 async function send(pcm: Float32Array, needWake: boolean): Promise<void> {
+  if (!needWake) blip();
   const bytes = new Uint8Array(pcm.length * 2);
   const view = new DataView(bytes.buffer);
   for (let i = 0; i < pcm.length; i++) view.setInt16(i * 2, Math.max(-32768, Math.min(32767, Math.round(pcm[i] * 32767))), true);
@@ -227,7 +251,7 @@ export async function setHandsFree(on: boolean): Promise<void> {
   unlock();
   if (on) {
     if (!(await openMic())) return;
-    seg = new Segmenter({ maxLen: 14, minSilence: 0.7 });
+    seg = new Segmenter({ maxLen: 14, minSilence: 0.55 });
     set({ handsFree: true });
   } else {
     seg = null;

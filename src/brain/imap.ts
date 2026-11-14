@@ -1,0 +1,52 @@
+/** Mail from any provider that offers IMAP (Gmail, iCloud, Yahoo, Fastmail…): unread messages in the inbox, read-only. */
+import { ImapFlow } from 'imapflow';
+import type { Mail } from '../shared/types';
+
+export type MailLogin = { id: string; host: string; port: number; user: string; pass: string };
+
+export const MAIL_PRESETS: Record<string, { name: string; host: string; port: number; help: string }> = {
+  gmail: { name: 'Gmail', host: 'imap.gmail.com', port: 993, help: 'Use an app password, not your normal one: turn on 2-Step Verification, then create one at myaccount.google.com/apppasswords.' },
+  icloud: { name: 'iCloud', host: 'imap.mail.me.com', port: 993, help: 'Use an app-specific password from account.apple.com → Sign-In and Security.' },
+  yahoo: { name: 'Yahoo', host: 'imap.mail.yahoo.com', port: 993, help: 'Use an app password from Yahoo Account Security.' },
+  fastmail: { name: 'Fastmail', host: 'imap.fastmail.com', port: 993, help: 'Use an app password from Settings → Privacy & Security.' },
+  other: { name: 'Other', host: '', port: 993, help: 'Enter your provider\'s IMAP server. Outlook.com and Hotmail are not supported: Microsoft only allows sign-in through its own apps.' },
+};
+
+/** Unread messages in the inbox, newest first. Opens the mailbox read-only: nothing is marked as read or changed. */
+export async function fetchUnread(acc: MailLogin, limit = 8): Promise<{ unread: number; items: Mail[] }> {
+  const client = new ImapFlow({
+    host: acc.host, port: acc.port, secure: acc.port === 993, auth: { user: acc.user, pass: acc.pass }, logger: false,
+    disableAutoIdle: true, socketTimeout: 20000, greetingTimeout: 12000, connectionTimeout: 12000,
+  } as never);
+  // Without this, a dropped connection would crash the whole app.
+  client.on('error', () => undefined);
+  try {
+    await client.connect();
+  } catch (err) {
+    const e = err as { authenticationFailed?: boolean; code?: string; message: string };
+    if (e.authenticationFailed) throw new Error('the mail server refused the password (most providers need an app password)');
+    throw new Error(/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timeout|EHOSTUNREACH/i.test(`${e.code} ${e.message}`) ? `can't reach ${acc.host}` : e.message);
+  }
+  try {
+    const lock = await client.getMailboxLock('INBOX', { readOnly: true });
+    try {
+      const found = await client.search({ seen: false }, { uid: true });
+      const uids = (Array.isArray(found) ? found : []).sort((a, b) => a - b);
+      const items: Mail[] = [];
+      if (uids.length) {
+        for await (const msg of client.fetch(uids.slice(-limit), { envelope: true, uid: true, internalDate: true }, { uid: true })) {
+          const from = msg.envelope?.from?.[0];
+          items.push({
+            id: `${acc.id}:${msg.uid}`, from: from?.name || (from?.address ? from.address.split('@')[0].replace(/[._]+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : 'Unknown'), subject: msg.envelope?.subject || '(no subject)',
+            at: new Date(msg.envelope?.date ?? msg.internalDate ?? Date.now()).getTime(),
+          });
+        }
+      }
+      return { unread: uids.length, items: items.sort((a, b) => b.at - a.at) };
+    } finally {
+      lock.release();
+    }
+  } finally {
+    await client.logout().catch(() => client.close());
+  }
+}

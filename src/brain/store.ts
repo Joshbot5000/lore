@@ -4,9 +4,9 @@ import path from 'node:path';
 import { DEFAULT_SETTINGS } from '../shared/types';
 import type { ChatMsg, CalEvent, Countdown, Focus, Habit, Memory, Money, Note, Routine, Settings, Task } from '../shared/types';
 
-type Shape = { settings: Settings; tasks: Task[]; notes: Note[]; money: Money[]; memories: Memory[]; chat: ChatMsg[]; events: CalEvent[]; focus: Focus[]; habits: Habit[]; countdowns: Countdown[]; routines: Routine[]; meta: { token: string; lastBriefing?: string } };
+type Shape = { settings: Settings; tasks: Task[]; notes: Note[]; money: Money[]; memories: Memory[]; chat: ChatMsg[]; events: CalEvent[]; focus: Focus[]; habits: Habit[]; countdowns: Countdown[]; routines: Routine[]; secrets: { haToken?: string; mail?: Record<string, string> }; meta: { token: string; lastBriefing?: string } };
 
-const FILES: (keyof Shape)[] = ['settings', 'tasks', 'notes', 'money', 'memories', 'chat', 'events', 'focus', 'habits', 'countdowns', 'routines', 'meta'];
+const FILES: (keyof Shape)[] = ['settings', 'tasks', 'notes', 'money', 'memories', 'chat', 'events', 'focus', 'habits', 'countdowns', 'routines', 'secrets', 'meta'];
 
 export class Store {
   private data: Shape;
@@ -31,6 +31,8 @@ export class Store {
         { id: 'r-morning', name: 'Good morning', steps: ['briefing'] },
         { id: 'r-night', name: 'Good night', steps: ['pause the music', 'evening review'] },
       ]),
+      // Passwords and tokens live in their own file, are never sent to the interface and are left out of exports.
+      secrets: read('secrets', {}),
       meta: read('meta', { token: '' }),
     };
     if (!this.data.meta.token) {
@@ -61,7 +63,7 @@ export class Store {
       const file = path.join(this.dir, `${key}.json`);
       const tmp = `${file}.${process.pid}.tmp`;
       const value = key === 'chat' ? this.data.chat.slice(-400) : this.data[key];
-      fs.writeFileSync(tmp, JSON.stringify(value));
+      fs.writeFileSync(tmp, JSON.stringify(value), key === 'secrets' ? { mode: 0o600 } : undefined);
       fs.renameSync(tmp, file);
     }
     this.dirty.clear();
@@ -69,13 +71,13 @@ export class Store {
 
   /** One file with everything, for backup or moving to another computer. */
   exportAll(): string {
-    return JSON.stringify(Object.fromEntries(FILES.filter((f) => f !== 'meta').map((f) => [f, this.data[f]])));
+    return JSON.stringify(Object.fromEntries(FILES.filter((f) => f !== 'meta' && f !== 'secrets').map((f) => [f, this.data[f]])));
   }
 
   importAll(json: string): void {
     const incoming = JSON.parse(json) as Partial<Shape>;
     for (const f of FILES) {
-      if (f === 'meta' || incoming[f] === undefined) continue;
+      if (f === 'meta' || f === 'secrets' || incoming[f] === undefined) continue;
       (this.data as Record<string, unknown>)[f] = f === 'settings' ? { ...DEFAULT_SETTINGS, ...incoming.settings } : incoming[f];
       this.touch(f);
     }

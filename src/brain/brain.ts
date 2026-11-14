@@ -11,10 +11,12 @@ import { Models, entry, recommendedLlm } from './models';
 import type { MacBridge } from './mac';
 import { forecast, geocode, weatherSentence, type Fetch } from './weather';
 import { expand, parseIcs } from './ics';
-import { readPage, webSearch, wikipedia } from './web';
+import { musicRequest, readPage, spotifyUri, webSearch, wikipedia } from './web';
 import { describeWhen, parseWhen, speakable, takeSentences } from '../shared/when';
 import { dayKey, daysUntil, doneToday, focusStats, inDays, isFocusStop, matchCountdown, matchHabit, parseFocus, spokenMinutes, streak, tidy } from './life';
 import { aboutRecordings, defaultHarkDir, harkContext, namesRecording, readHark, type HarkRec } from './hark';
+import { HomeAssistant, isOn, matchEntities, parseHomeCommand, tapService, type HaEntity } from './ha';
+import { MAIL_PRESETS, fetchUnread } from './imap';
 import { uid } from '../shared/types';
 import type { Focus, FocusNow, Habit, Recording, Routine } from '../shared/types';
 import type { CalEvent, ChatMsg, EngineStatus, HomeAction, Integrations, Mail, Memory, Need, NowPlaying, Push, Settings, Snapshot, Task, Timer, ToolUse, Vitals, Weather } from '../shared/types';
@@ -95,6 +97,9 @@ export class Brain extends EventEmitter {
     weather: { state: 'setup' }, calendar: { state: 'off' }, mail: { state: 'off' }, music: { state: 'off' }, home: { state: 'off' }, system: { state: 'ok' }, hark: { state: 'off' },
   };
   private focusNow: FocusNow | null = null;
+  private shortcutTiles: HomeAction[] = [];
+  private haEntities: HaEntity[] = [];
+  private haProblem = '';
   private recordings: HarkRec[] = [];
   private lastCpu = os.cpus().map((c) => c.times);
   private turnSeq = 0;
@@ -144,6 +149,8 @@ export class Brain extends EventEmitter {
 
   start(): void {
     this.refreshStatus();
+    // An update can change a model (the voice moved to its full-quality version): fetch it without being asked.
+    if (this.settings.onboarded && !this.models.installed('voice') && this.models.installed(this.settings.asrModel)) void this.models.download('voice');
     void this.ensureAsr().catch(() => undefined);
     void this.ensureVoice().catch(() => undefined);
     setTimeout(() => void this.ensureLlm().catch(() => undefined), 1500);
@@ -158,6 +165,7 @@ export class Brain extends EventEmitter {
     every(10 * 60e3, () => this.refreshHome());
     every(5e3, () => this.refreshVitals());
     every(120e3, () => this.refreshHark());
+    every(15e3, () => this.refreshHa());
     every(1e3, () => this.tick());
   }
 
@@ -232,6 +240,8 @@ export class Brain extends EventEmitter {
       this.llmInfo = await this.llm.call('load', { modelPath: process.env.JARVIS_LLM_FILE || this.models.llmPath(id), contextSize: this.ramGb >= 14 ? 8192 : 6144 });
       this.llmLoaded = id;
       this.refreshStatus({ llm: 'ready', gpu: this.llmInfo!.gpu });
+      // Read the standing instructions once now, so the first real question does not pay for it.
+      void this.llm.call('generate', { streamId: `warm${++this.turnSeq}`, system: this.persona(), prompt: 'Hello', maxTokens: 1, temperature: 0 }).catch(() => undefined);
       return this.llmInfo!;
     } catch (err) {
       this.refreshStatus({ llm: 'error', error: String((err as Error).message) });
@@ -279,17 +289,35 @@ export class Brain extends EventEmitter {
   }
 
   async refreshMail(): Promise<void> {
-    if (!this.settings.useAppleMail) return this.setIntegration('mail', 'off', 'Turned off in Settings');
-    try {
-      const m = await this.o.mac.mail();
-      if (!m) return this.setIntegration('mail', 'off', 'Open the Mail app to see your inbox');
-      this.mail = m.items;
-      this.unread = m.unread;
-      this.setIntegration('mail', 'ok');
-      this.patch({ mail: this.mail, unread: this.unread, needs: this.needs() });
-    } catch (err) {
-      this.setIntegration('mail', 'error', (err as Error).message);
+    const accounts = this.settings.mailAccounts;
+    if (!this.settings.useAppleMail && !accounts.length) return this.setIntegration('mail', 'off', 'Add a mail account in Settings');
+    const items: Mail[] = [];
+    let unread = 0, ok = false, problem = '';
+    if (this.settings.useAppleMail) {
+      try {
+        const m = await this.o.mac.mail();
+        if (m) (items.push(...m.items), (unread += m.unread), (ok = true));
+      } catch (err) {
+        problem = (err as Error).message;
+      }
     }
+    const passwords = this.store.get('secrets').mail ?? {};
+    for (const a of accounts) {
+      try {
+        const m = await fetchUnread({ ...a, pass: passwords[a.id] ?? '' });
+        items.push(...m.items);
+        unread += m.unread;
+        ok = true;
+      } catch (err) {
+        problem = `${a.label}: ${(err as Error).message}`;
+      }
+    }
+    if (!ok && !problem) return this.setIntegration('mail', 'off', accounts.length ? undefined : 'Open the Mail app, or add a mail account in Settings');
+    this.mail = items.sort((a, b) => b.at - a.at).slice(0, 12);
+    this.unread = unread;
+    // One account failing should be visible even while another works.
+    this.setIntegration('mail', problem ? 'error' : 'ok', problem || undefined);
+    this.patch({ mail: this.mail, unread: this.unread, needs: this.needs() });
   }
 
   async refreshCalendar(): Promise<void> {
@@ -331,12 +359,57 @@ export class Brain extends EventEmitter {
     try {
       const all = await this.o.mac.shortcuts();
       const chosen = this.settings.homeShortcuts;
-      this.home = (chosen.length ? all.filter((n) => chosen.includes(n)) : all.slice(0, 8)).map((name) => ({ id: name, name }));
-      this.setIntegration('home', all.length ? 'ok' : 'setup', all.length ? undefined : 'Create a shortcut in the Shortcuts app');
+      this.shortcutTiles = (chosen.length ? all.filter((n) => chosen.includes(n)) : all.slice(0, this.settings.haUrl ? 4 : 8)).map((name) => ({ id: name, name, kind: 'shortcut' as const }));
+      this.home = [...this.haTiles(), ...this.shortcutTiles];
+      if (!this.settings.haUrl) this.setIntegration('home', all.length ? 'ok' : 'setup', all.length ? undefined : 'Create a shortcut in the Shortcuts app, or connect Home Assistant in Settings');
       this.patch({ home: this.home });
     } catch (err) {
-      this.setIntegration('home', 'error', (err as Error).message);
+      if (!this.settings.haUrl) this.setIntegration('home', 'error', (err as Error).message);
     }
+  }
+
+  private haClient(): HomeAssistant | null {
+    const url = this.settings.haUrl.trim(), token = this.store.get('secrets').haToken;
+    return url && token ? new HomeAssistant(this.o.fetch, url, token) : null;
+  }
+
+  private haTiles(): HomeAction[] {
+    const chosen = this.settings.haEntities;
+    const pick = chosen.length
+      ? chosen.map((id) => this.haEntities.find((e) => e.id === id)).filter((e): e is HaEntity => !!e)
+      : this.haEntities.filter((e) => ['light', 'switch', 'scene', 'climate', 'cover'].includes(e.domain)).slice(0, 8);
+    return pick.map((e) => ({
+      id: e.id, name: e.name, kind: 'ha' as const, domain: e.domain, on: e.domain === 'scene' || e.domain === 'script' ? undefined : isOn(e),
+      detail: e.domain === 'climate' ? (e.current !== undefined ? `${Math.round(e.current * 10) / 10}°` : undefined) : e.domain === 'light' && isOn(e) && e.brightness ? `${e.brightness}%` : undefined,
+    }));
+  }
+
+  /** Read the state of the home from Home Assistant. */
+  async refreshHa(): Promise<void> {
+    const ha = this.haClient();
+    if (!ha) {
+      if (this.haEntities.length) ((this.haEntities = []), (this.home = this.shortcutTiles), this.patch({ home: this.home }));
+      return;
+    }
+    try {
+      this.haEntities = await ha.states();
+      this.haProblem = '';
+      this.setIntegration('home', 'ok', `Home Assistant: ${this.haEntities.filter((e) => e.domain !== 'sensor').length} devices`);
+    } catch (err) {
+      this.haProblem = (err as Error).message;
+      this.setIntegration('home', 'error', this.haProblem);
+    }
+    const next = [...this.haTiles(), ...this.shortcutTiles];
+    if (JSON.stringify(next) !== JSON.stringify(this.home)) ((this.home = next), this.patch({ home: next }));
+  }
+
+  /** Carry out a home command, then look again so the dashboard shows the new state. */
+  private async haCall(targets: HaEntity[], domain: string, service: string, data: Record<string, unknown> = {}): Promise<void> {
+    const ha = this.haClient();
+    if (!ha) throw new Error('Home Assistant is not connected');
+    await ha.call(domain, service, { entity_id: targets.map((t) => t.id), ...data });
+    setTimeout(() => void this.refreshHa(), 700);
+    setTimeout(() => void this.refreshHa(), 2500);
   }
 
   private get harkDir(): string {
@@ -456,6 +529,54 @@ export class Brain extends EventEmitter {
     return P.join(' ');
   }
 
+  /** "Play X": find it and start it. Returns what to say. */
+  async playMusic(said: string): Promise<{ reply: string; ok: boolean }> {
+    const app = this.settings.musicApp;
+    const { query, kind } = musicRequest(said);
+    if (!query) return { reply: 'Play what?', ok: false };
+    const settle = async (): Promise<string> => {
+      await new Promise((r) => setTimeout(r, 1300));
+      await this.refreshMusic();
+      return this.music?.state === 'playing' && this.music.title ? `Playing ${this.music.title}${this.music.artist ? ` by ${this.music.artist}` : ''}.` : `I've asked ${app} to play ${query}.`;
+    };
+    try {
+      if (app === 'Music') {
+        if (await this.o.mac.playMusic(app, query)) return { reply: await settle(), ok: true };
+      } else {
+        // Spotify can play anything by its address; a quick search finds the address. No account or key involved.
+        const hits = await webSearch(this.o.fetch, `site:open.spotify.com ${query}${kind ? ` ${kind}` : ''}`).catch(() => []);
+        const hit = spotifyUri(hits, kind);
+        if (hit) {
+          await this.o.mac.playMusic(app, hit.uri);
+          return { reply: await settle(), ok: true };
+        }
+      }
+    } catch (err) {
+      return { reply: `${app} wouldn't play that: ${(err as Error).message}`, ok: false };
+    }
+    // Couldn't find it: show the search in the app rather than pretend.
+    await this.o.mac.musicControl(app, 'search', query).catch(() => undefined);
+    return { reply: `I couldn't find ${query} to play directly, so I've opened the search in ${app === 'Music' ? 'Apple Music' : app}.`, ok: false };
+  }
+
+  private nowPlayingText(): string {
+    const m = this.music;
+    const app = this.settings.musicApp === 'Music' ? 'Apple Music' : this.settings.musicApp;
+    if (!m) return `${app} isn't open.`;
+    if (!m.title || m.state === 'stopped') return 'Nothing is playing.';
+    return `${m.state === 'playing' ? 'This is' : 'Paused on'} ${m.title}${m.artist ? ` by ${m.artist}` : ''}${m.album && m.album !== m.title ? `, from ${m.album}` : ''}.`;
+  }
+
+  private dayText(offset: 0 | 1): string {
+    const start = new Date().setHours(0, 0, 0, 0) + offset * 864e5, end = start + 864e5, now = Date.now();
+    const evs = this.events.filter((e) => e.start < end && e.end > Math.max(start, offset ? start : now));
+    const at = (t: number) => new Date(t).toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(':00', '').replace(' ', '');
+    const day = offset ? 'tomorrow' : 'today';
+    if (this.integrations.calendar.state !== 'ok' && !evs.length) return `I can't see a calendar yet. Add one in Settings.`;
+    if (!evs.length) return offset ? 'Nothing in the calendar tomorrow.' : 'Nothing else in the calendar today.';
+    return `${evs.length === 1 ? 'One thing' : `${evs.length} things`} ${day}: ${evs.slice(0, 5).map((e) => `${e.title}${e.allDay ? '' : ` at ${at(e.start)}`}`).join(', ')}.`;
+  }
+
   private batteryAt = 0;
   async refreshVitals(): Promise<void> {
     const now = os.cpus().map((c) => c.times);
@@ -572,6 +693,8 @@ export class Brain extends EventEmitter {
     if (patch.musicApp !== undefined) void this.refreshMusic();
     if (patch.homeShortcuts !== undefined) void this.refreshHome();
     if (patch.useHark !== undefined) this.refreshHark();
+    if (patch.haUrl !== undefined || patch.haEntities !== undefined) void this.refreshHa();
+    if (patch.mailAccounts !== undefined) void this.refreshMail();
     if (patch.asrModel !== undefined && patch.asrModel !== before.asrModel) void this.ensureAsr().catch(() => undefined);
     if (patch.llmModel !== undefined && patch.llmModel !== before.llmModel) {
       this.llmLoaded = '';
@@ -731,19 +854,20 @@ export class Brain extends EventEmitter {
         },
       },
       {
-        name: 'music', description: `Control ${s.musicApp}: play, pause, skip, go back, set volume (0-100), or search for something to play.`,
-        params: { type: 'object', properties: { action: { type: 'string', enum: ['play', 'pause', 'next', 'previous', 'volume', 'search'] }, value: { type: 'string', description: 'Volume number, or what to search for' } }, required: ['action'] },
+        name: 'music', description: `Control ${s.musicApp}: play, pause, skip, go back, set volume (0-100), or play something specific (action "play" with the song, artist, album or playlist as value).`,
+        params: { type: 'object', properties: { action: { type: 'string', enum: ['play', 'pause', 'next', 'previous', 'volume', 'search'] }, value: { type: 'string', description: 'Volume number, or what to play' } }, required: ['action'] },
         label: ({ action }) => `Music: ${action}`,
         run: async ({ action, value }) => {
+          if ((action === 'search' || action === 'play') && value) return (await this.playMusic(String(value))).reply;
           await mac.musicControl(s.musicApp, action, value);
           setTimeout(() => void this.refreshMusic(), 600);
           return 'Done.';
         },
       },
-      ...(this.home.length
+      ...(this.shortcutTiles.length
         ? [{
-            name: 'run_shortcut', description: `Run one of the user's Shortcuts (home and device automations). Available: ${this.home.map((h) => h.name).join(', ')}.`,
-            params: { type: 'object', properties: { name: { type: 'string', enum: this.home.map((h) => h.name) } }, required: ['name'] },
+            name: 'run_shortcut', description: `Run one of the user's Shortcuts (home and device automations). Available: ${this.shortcutTiles.map((h) => h.name).join(', ')}.`,
+            params: { type: 'object', properties: { name: { type: 'string', enum: this.shortcutTiles.map((h) => h.name) } }, required: ['name'] },
             label: ({ name }: { name: string }) => `Ran “${name}”`,
             run: async ({ name }: { name: string }) => {
               await mac.runShortcut(String(name));
@@ -816,6 +940,11 @@ export class Brain extends EventEmitter {
     const open = this.store.get('tasks').filter((t) => !t.done).slice(0, 10);
     L.push(open.length ? `To-do list: ${open.map((t) => t.title + (t.due ? ` (due ${describeWhen(t.due)})` : '')).join('; ')}.` : 'To-do list: empty.');
     if (this.integrations.mail.state === 'ok') L.push(this.unread ? `Inbox: ${this.unread} unread emails. ${this.mail.slice(0, 5).map((m) => `From ${m.from}, subject “${m.subject}”`).join('. ')}.` : 'Inbox: no unread emails.');
+    if (this.haEntities.length) {
+      const lit = this.haEntities.filter((e) => e.domain === 'light' && isOn(e));
+      const heat = this.haEntities.find((e) => e.domain === 'climate');
+      L.push(`Home: ${lit.length ? `${lit.length} light${lit.length === 1 ? '' : 's'} on (${lit.slice(0, 6).map((e) => e.name).join(', ')})` : 'all lights off'}${heat?.current !== undefined ? `; ${heat.name} is at ${heat.current} degrees${heat.temperature !== undefined ? `, set to ${heat.temperature}` : ''}` : ''}.`);
+    }
     if (this.music?.title) L.push(`Music: ${this.music.state} “${this.music.title}” by ${this.music.artist}.`);
     if (this.timers.length) L.push(`Timers: ${this.timers.map((t) => `${t.label || 'timer'} with ${Math.ceil((t.endsAt - now.getTime()) / 6e4)} min left`).join('; ')}.`);
     const money = this.store.get('money');
@@ -845,7 +974,7 @@ export class Brain extends EventEmitter {
     const address = s.address === 'name' ? (s.userName ? `Call them ${s.userName}, sparingly.` : '') : `Address them as "${this.you()}", sparingly.`;
     return `You are ${s.assistantName}, ${who}'s personal assistant, running privately on their own computer. You are calm, capable and quick, with a dry British wit that you use lightly. ${address}
 
-Your replies are spoken aloud, so write the way a person talks: one to three short sentences, plain words, no lists, no markdown, no emoji. Give the answer first. Never read out raw data such as URLs or IDs.
+Your replies are spoken aloud, so write the way a person talks: one or two short sentences, contractions, plain words, no lists, no markdown, no emoji, no brackets. Give the answer first, in the first few words. Don't repeat the question back or pad with offers of more help. Never read out raw data such as URLs or IDs.
 
 Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music, focus time, habits, countdowns, sometimes their recorded conversations or clipboard, and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. Act only on the newest message: everything earlier in the conversation has already been dealt with. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
   }
@@ -920,7 +1049,54 @@ Each request comes with a <context> block. It is your live view of their world: 
 
     // ---- the day, top and tail
     if (/^(evening review|daily review|review (my|the) day|how did (today|my day) go|end of day( review)?|wrap up( my| the)? day|how was my day)$/.test(c)) return { reply: this.reviewText() };
-    if (/^(briefing|brief me|morning briefing|daily briefing|(give me|play) (my|the) (morning |daily )?briefing|whats on today)$/.test(c.replace(/'/g, ''))) return { reply: this.briefingText() };
+    if (/^(briefing|brief me|morning briefing|daily briefing|(give me|play) (my|the) (morning |daily )?briefing)$/.test(c.replace(/'/g, ''))) return { reply: this.briefingText() };
+
+    // ---- the home, through Home Assistant
+    if (this.haEntities.length) {
+      const cmd = parseHomeCommand(c, this.haEntities);
+      if (cmd && 'answer' in cmd) return { reply: cmd.answer };
+      if (cmd) {
+        try {
+          await this.haCall(cmd.targets, cmd.domain, cmd.service, cmd.data);
+          return { reply: cmd.reply, tool: did('home', cmd.reply.replace(/\.$/, '')) };
+        } catch (err) {
+          return { reply: `That didn't work: ${(err as Error).message}.`, tool: { name: 'home', label: 'Home command failed', ok: false } };
+        }
+      }
+    }
+
+    // ---- things he can simply see: answered at once, without waking the language model
+    if (/^(what|which) (song|track|music|tune|album|artist)( is|s)? (this|that|playing|on)( right now| now)?$|^whats (this song|this track|this|playing|on)( right now| now)?$|^what is (this song|this track|playing)( right now| now)?$|^who (sings|is singing|is this|made|plays) ?(this|that)?( song)?$|^what am i listening to( right now)?$|^(name|identify) (this|that) (song|track)$/.test(c.replace(/'/g, ''))) {
+      await this.refreshMusic();
+      return { reply: this.nowPlayingText() };
+    }
+    const play = c.match(/^(?:play|put on|stick on|throw on) (.+)$/);
+    if (play && !/^(the |some |my |a )?(music|it|song|track|that|this|something|anything)$/.test(play[1]) && !/^(next|previous)\b/.test(play[1])) {
+      const r = await this.playMusic(play[1]);
+      return { reply: r.reply, tool: { name: 'music', label: r.ok ? `Playing ${musicRequest(play[1]).query}` : `Searched ${s.musicApp} for ${musicRequest(play[1]).query}`, ok: r.ok } };
+    }
+    const vol = c.match(/^(?:set |turn |change )?(?:the )?(?:music |spotify )?volume (?:to |at )?(\d{1,3})(?: percent)?$/) ?? c.match(/^(?:turn |set )(?:the )?(?:music|spotify|it) (?:up|down) to (\d{1,3})(?: percent)?$/);
+    if (vol && /music|spotify/.test(c)) return { reply: `Music volume at ${Math.min(100, +vol[1])}.`, tool: await use('music', { action: 'volume', value: String(Math.min(100, +vol[1])) }) };
+    if (/^(whats|what is|hows|how is) the weather( like)?( today| right now| outside| now)?$|^weather$|^(is it|will it) (going to )?rain(ing)?( today| later| tonight)?$|^do i need (an umbrella|a coat|a jacket)( today)?$/.test(c.replace(/'/g, ''))) {
+      if (!this.weather) return { reply: s.place ? "I can't reach the weather service right now." : "Tell me your town in Settings and I'll keep an eye on the weather." };
+      const rain = this.weather.days[0]?.rain ?? 0;
+      return { reply: /rain|umbrella|coat|jacket/.test(c) ? `${rain >= 50 ? 'Yes, likely' : rain >= 25 ? 'Possibly' : 'Unlikely'}: ${rain} percent chance of rain today. It's ${weatherSentence(this.weather)}.` : `It's ${weatherSentence(this.weather)}.` };
+    }
+    if (/^(whats|what is|what have i got|what do i have|anything|is there anything) on( my calendar)?( for)? (today|tomorrow)$|^whats (on )?(my )?(calendar|schedule|diary)( look like)?( for)?( today| tomorrow)?$|^what does (today|tomorrow) look like$/.test(c.replace(/'/g, ''))) return { reply: this.dayText(/tomorrow/.test(c) ? 1 : 0) };
+    if (/^whats (my )?next (meeting|event|appointment|thing)$|^what is (my )?next (meeting|event|appointment)$|^whats next$/.test(c.replace(/'/g, ''))) {
+      const next = this.events.find((e) => e.start > Date.now());
+      return { reply: next ? `${next.title}, ${describeWhen(next.start)}.` : 'Nothing coming up in your calendar.' };
+    }
+    if (/^(whats|what is) on my (to ?do )?list$|^what do i (have|need) to do( today)?$|^(read|list|tell me)( me)? my (tasks|to ?dos|reminders|to ?do list|list)$|^whats left to do( today)?$/.test(c.replace(/['-]/g, ''))) {
+      const open = this.store.get('tasks').filter((x) => !x.done);
+      if (!open.length) return { reply: 'Your list is empty.' };
+      return { reply: `${open.length === 1 ? 'One thing' : `${open.length} things`}: ${open.slice(0, 5).map((x) => x.title.toLowerCase() + (x.due ? `, ${describeWhen(x.due)}` : '')).join('; ')}${open.length > 5 ? `; and ${open.length - 5} more` : ''}.` };
+    }
+    if (/^(do i have |have i got |is there |are there )?(any )?(new |unread )?(emails?|mail|messages)$|^(check|read)( me)? my (emails?|mail|inbox)$|^who( has|s)? emailed me$|^whats in my inbox$/.test(c.replace(/'/g, ''))) {
+      if (this.integrations.mail.state !== 'ok') return { reply: "I can't see your mail yet. Add a mail account in Settings, or open the Mail app." };
+      if (!this.unread) return { reply: 'No unread email.' };
+      return { reply: `${this.unread} unread${this.mail.length ? `: ${this.mail.slice(0, 3).map((m) => `${m.from} about ${m.subject.replace(/^(re|fwd?):\s*/i, '')}`).join('; ')}` : ''}.` };
+    }
 
     // ---- clipboard
     if (/^copy (that|this|it|your (answer|reply|response)|what you (just )?said)( to (my |the )?clipboard)?$/.test(c)) {
@@ -940,7 +1116,7 @@ Each request comes with a <context> block. It is your live view of their world: 
       return { reply: `${words[n] ?? n} ${unit}${(words[n] ?? +n) === 1 ? '' : 's'}, starting now.`, tool: await use('set_timer', { minutes, label }) };
     }
     const music: [RegExp, string, string][] = [
-      [/^(pause|stop)( the)?( music| song| track| it)?$/, 'pause', 'Paused.'], [/^(play|resume)( the)?( music| it)?$/, 'play', 'Playing.'],
+      [/^(pause|stop)( the)?( music| song| track| it)?$|^(turn|switch) off( the)? music$|^(turn|switch)( the)? music off$/, 'pause', 'Paused.'], [/^(play|resume)( the| some)?( music| it)?$|^(turn|switch) on( the)? music$|^(turn|switch)( the)? music on$/, 'play', 'Playing.'],
       [/^(next|skip)( song| track| this| it)?$/, 'next', 'Skipped.'], [/^(previous|last|go back)( song| track)?$/, 'previous', 'Going back one.'],
     ];
     for (const [re, action, reply] of music) if (re.test(t)) return { reply, tool: await use('music', { action }) };
@@ -982,6 +1158,19 @@ Each request comes with a <context> block. It is your live view of their world: 
 
   // ------------------------------------------------------------------ conversation
 
+  /** Stage timings for each reply, so slow spots can be seen (in the log) rather than guessed at. */
+  private marks = new Map<string, { t0: number; asr?: number; think?: number; voice?: number; thinkAt?: number }>();
+  private mark(turn: string, stage: 'think' | 'voice'): void {
+    const m = this.marks.get(turn);
+    if (!m || m[stage] !== undefined) return;
+    const now = Date.now();
+    if (stage === 'think') (m.think = now - m.t0 - (m.asr ?? 0)), (m.thinkAt = now);
+    else {
+      m.voice = now - (m.thinkAt ?? m.t0);
+      this.push({ type: 'say', turn, timing: { asr: m.asr, think: m.think, voice: m.voice, total: now - m.t0 } });
+    }
+  }
+
   private speakChain: Promise<void> = Promise.resolve();
   private speakSeq = new Map<string, number>();
 
@@ -1000,7 +1189,10 @@ Each request comes with a <context> block. It is your live view of their world: 
       try {
         await this.ensureVoice();
         const out = await this.voice.call<{ pcm: string; rate: number }>('speak', { text: clean, voice: s.voice, speed: s.speed });
-        this.push({ type: 'audio', turn, seq, wav: `${out.rate}:${out.pcm}`, text: clean, last });
+        // A breath after a sentence, a beat after a clause.
+        const gap = /[.!?…]["')\]]?$/.test(clean) ? 230 : /[,;:—–]$/.test(clean) ? 90 : 50;
+        this.push({ type: 'audio', turn, seq, wav: `${out.rate}:${out.pcm}`, text: clean, last, gap });
+        this.mark(turn, 'voice');
       } catch {
         if (last) this.push({ type: 'audio', turn, seq, wav: '', text: '', last: true });
       }
@@ -1029,7 +1221,9 @@ Each request comes with a <context> block. It is your live view of their world: 
     const buf = Buffer.from(pcmBase64, 'base64');
     const pcm = new Float32Array(buf.length / 2);
     for (let i = 0; i < pcm.length; i++) pcm[i] = buf.readInt16LE(i * 2) / 32768;
+    const t0 = Date.now();
     const heard = await this.speech.call<string>('transcribe', { pcm, language: 'en' });
+    const asr = Date.now() - t0;
     if (!heard || heard.replace(/[^a-z]/gi, '').length < 2) return { heard: '', ignored: true };
     if (opts.needWake) {
       const name = this.settings.assistantName.toLowerCase();
@@ -1038,19 +1232,21 @@ Each request comes with a <context> block. It is your live view of their world: 
       const low = heard.toLowerCase();
       if (!variants.some((v) => low.includes(v))) return { heard, ignored: true };
     }
-    void this.say(heard, { device: opts.device, voice: true });
+    void this.say(heard, { device: opts.device, voice: true, t0, asr });
     return { heard };
   }
 
   /** One conversational turn. Resolves when the reply text is complete. */
-  async say(text: string, opts: { device?: string; voice?: boolean } = {}): Promise<ChatMsg> {
+  async say(text: string, opts: { device?: string; voice?: boolean; t0?: number; asr?: number } = {}): Promise<ChatMsg> {
     text = text.trim();
     const turn = `t${++this.turnSeq}`;
+    this.marks.set(turn, { t0: opts.t0 ?? Date.now(), asr: opts.asr });
+    if (this.marks.size > 20) this.marks.delete(this.marks.keys().next().value!);
     if (this.activeTurn && this.llm.running) void this.llm.call('abort', { streamId: this.activeTurn }).catch(() => undefined);
     this.activeTurn = turn;
     const chat = this.store.get('chat');
     // Past actions are shown as finished, so an old request is never carried out a second time.
-    const history = chat.slice(-8).map((c) => ({ role: c.role, text: c.tools?.some((t) => t.ok) ? `${c.text} [Already completed: ${c.tools.filter((t) => t.ok).map((t) => t.label).join('; ')}]` : c.text }));
+    const history = chat.slice(-6).map((c) => ({ role: c.role, text: c.tools?.some((t) => t.ok) ? `${c.text} [Already completed: ${c.tools.filter((t) => t.ok).map((t) => t.label).join('; ')}]` : c.text }));
     const userMsg: ChatMsg = { id: uid(), role: 'user', text, at: Date.now(), device: opts.device };
     chat.push(userMsg);
     this.store.touch('chat');
@@ -1074,7 +1270,8 @@ Each request comes with a <context> block. It is your live view of their world: 
       reply += (reply ? ' ' : '') + sorry;
     }
     if (speak) void this.speakOut(turn, '', true);
-    const msg: ChatMsg = { id: uid(), role: 'assistant', text: reply, at: Date.now(), tools: uses.length ? uses : undefined };
+    const mk = this.marks.get(turn);
+    const msg: ChatMsg = { id: uid(), role: 'assistant', text: reply, at: Date.now(), tools: uses.length ? uses : undefined, timing: mk ? { asr: mk.asr, think: mk.think } : undefined };
     chat.push(msg);
     this.store.touch('chat');
     this.push({ type: 'say', turn, done: true, state: 'idle' });
@@ -1090,6 +1287,7 @@ Each request comes with a <context> block. It is your live view of their world: 
     const fast = await this.quick(text).catch(() => null);
     if (fast) {
       if (fast.tool) (uses.push(fast.tool), this.push({ type: 'say', turn, tool: fast.tool }));
+      this.mark(turn, 'think');
       this.push({ type: 'say', turn, delta: lead + fast.reply, state: 'speaking' });
       // Long replies (a briefing, a review) are voiced a sentence at a time, so speech starts at once.
       if (speak) for (const sentence of takeSentences(fast.reply, true).sentences) void this.speakOut(turn, sentence);
@@ -1106,16 +1304,23 @@ Each request comes with a <context> block. It is your live view of their world: 
     let reply = '';
     let pending = '';
     let first = true;
+    let spoke = false;
     const before = uses.length;
     const onChunk = (c: { streamId: string; delta: string }) => {
       if (c.streamId !== turn || this.activeTurn !== turn) return;
       reply += c.delta;
+      this.mark(turn, 'think');
       this.push({ type: 'say', turn, delta: (first ? lead : '') + c.delta, state: 'speaking' });
       first = false;
       if (!speak) return;
       const cut = takeSentences(pending + c.delta);
       pending = cut.rest;
-      for (const sentence of cut.sentences) void this.speakOut(turn, sentence);
+      for (const sentence of cut.sentences) (void this.speakOut(turn, sentence), (spoke = true));
+      // Start talking at the first natural break rather than waiting for a whole sentence.
+      if (!spoke) {
+        const clause = pending.match(/^(.{18,}?[,;:—–])\s+(?=\S)/);
+        if (clause) (void this.speakOut(turn, clause[1]), (spoke = true), (pending = pending.slice(clause[0].length)));
+      }
     };
     const done = new Set<string>();
     const onTool = async (c: { streamId: string; callId: string; name: string; args: any }) => {
@@ -1149,7 +1354,7 @@ Each request comes with a <context> block. It is your live view of their world: 
         history,
         prompt: `<context>\n${await this.context(text)}\n</context>\n\n${text}`,
         ...(tools.length ? { tools: tools.map(({ name, description, params }) => ({ name, description, params })) } : {}),
-        maxTokens: 500,
+        maxTokens: 260,
         temperature: 0.5,
       });
       if (final && final.length > reply.trim().length && !reply.trim()) {
@@ -1276,6 +1481,49 @@ Each request comes with a <context> block. It is your live view of their world: 
     refresh: () => Promise.all([this.refreshWeather(), this.refreshMail(), this.refreshCalendar(), this.refreshMusic(), this.refreshHome()]).then(() => true),
     downloadModel: (p: { id: string }) => void this.models.download(p.id),
     cancelDownload: (p: { id: string }) => this.models.cancel(p.id),
+    tapHome: async (p: { id: string }) => {
+      const e = this.haEntities.find((x) => x.id === p.id);
+      if (!e) throw new Error('That device is no longer available.');
+      const svc = tapService(e);
+      await this.haCall([e], svc.domain, svc.service);
+      return true;
+    },
+    /** Save the Home Assistant address and token, after checking they work. */
+    saveHomeAssistant: async (p: { url: string; token?: string }) => {
+      const url = String(p.url ?? '').trim().replace(/\/+$/, '');
+      const token = p.token?.trim() || this.store.get('secrets').haToken || '';
+      if (!url) {
+        this.store.set('secrets', { ...this.store.get('secrets'), haToken: undefined });
+        this.patchSettings({ haUrl: '', haEntities: [] });
+        await this.refreshHome();
+        return { ok: true, devices: 0 };
+      }
+      if (!/^https?:\/\//i.test(url)) throw new Error('The address should start with http:// or https://');
+      if (!token) throw new Error('Paste a long-lived access token from Home Assistant.');
+      const devices = (await new HomeAssistant(this.o.fetch, url, token).states()).filter((e) => e.domain !== 'sensor').length;
+      this.store.set('secrets', { ...this.store.get('secrets'), haToken: token });
+      this.patchSettings({ haUrl: url });
+      await this.refreshHa();
+      return { ok: true, devices };
+    },
+    allHaEntities: () => this.haEntities.filter((e) => e.domain !== 'sensor').map((e) => ({ id: e.id, name: e.name, domain: e.domain })),
+    /** Add a mail account, after checking the server accepts it. */
+    saveMailAccount: async (p: { preset: string; host?: string; port?: number; user: string; pass: string }) => {
+      const preset = MAIL_PRESETS[p.preset] ?? MAIL_PRESETS.other;
+      const host = (preset.host || String(p.host ?? '')).trim(), user = String(p.user ?? '').trim(), pass = String(p.pass ?? '').replace(/\s+/g, p.preset === 'gmail' ? '' : ' ').trim();
+      if (!host || !user || !pass) throw new Error('Fill in the server, your email address and the app password.');
+      const acc = { id: uid(), label: user, host, port: Number(p.port) || preset.port, user };
+      const found = await fetchUnread({ ...acc, pass }, 1);
+      this.store.set('secrets', { ...this.store.get('secrets'), mail: { ...(this.store.get('secrets').mail ?? {}), [acc.id]: pass } });
+      this.patchSettings({ mailAccounts: [...this.settings.mailAccounts.filter((a) => a.user !== user || a.host !== host), acc] });
+      return { ok: true, unread: found.unread };
+    },
+    deleteMailAccount: (p: { id: string }) => {
+      const mail = { ...(this.store.get('secrets').mail ?? {}) };
+      delete mail[p.id];
+      this.store.set('secrets', { ...this.store.get('secrets'), mail });
+      this.patchSettings({ mailAccounts: this.settings.mailAccounts.filter((a) => a.id !== p.id) });
+    },
     startFocus: (p: { minutes: number; subject?: string }) => void this.startFocus(p.minutes, p.subject ?? ''),
     stopFocus: () => this.endFocus(),
     addHabit: (p: { name: string }) => {

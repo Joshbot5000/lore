@@ -1,8 +1,8 @@
 /** The line to the brain: one WebSocket, live state, and the stream of whatever Jarvis is saying. */
 import { useSyncExternalStore } from 'react';
-import type { Push, Snapshot, ToolUse } from '../../shared/types';
+import type { Push, Snapshot, Timing, ToolUse } from '../../shared/types';
 
-export type Turn = { id: string; heard: string; text: string; tools: ToolUse[]; state: 'thinking' | 'speaking' | 'idle'; done: boolean };
+export type Turn = { id: string; heard: string; text: string; tools: ToolUse[]; state: 'thinking' | 'speaking' | 'idle'; done: boolean; timing?: Timing };
 export type Mode = 'idle' | 'listening' | 'thinking' | 'speaking';
 export type Toast = { id: number; text: string; tone: 'info' | 'alert' };
 
@@ -114,7 +114,7 @@ export function connect(): void {
     else if (p.type === 'say') {
       set((s) => {
         const cur: Turn = s.turn && s.turn.id === p.turn ? s.turn : { id: p.turn, heard: '', text: '', tools: [], state: 'thinking', done: false };
-        const turn: Turn = { ...cur, heard: p.heard ?? cur.heard, text: cur.text + (p.delta ?? ''), tools: p.tool ? [...cur.tools, p.tool] : cur.tools, state: p.state ?? cur.state, done: cur.done || !!p.done };
+        const turn: Turn = { ...cur, timing: p.timing ?? cur.timing, heard: p.heard ?? cur.heard, text: cur.text + (p.delta ?? ''), tools: p.tool ? [...cur.tools, p.tool] : cur.tools, state: p.state ?? cur.state, done: cur.done || !!p.done };
         // "Speaking" on screen is driven by the audio player when voice is on; text-only replies settle here.
         const mode: Mode = p.done ? (s.mode === 'thinking' ? 'idle' : s.mode) : p.state === 'thinking' ? 'thinking' : s.mode === 'listening' ? s.mode : turn.text ? (s.mode === 'thinking' ? 'speaking' : s.mode) : s.mode;
         return { turn, mode };

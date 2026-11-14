@@ -26,7 +26,7 @@ export function parseDuck(html: string): Hit[] {
 }
 
 export async function webSearch(fetcher: Fetch, query: string): Promise<Hit[]> {
-  const res = await fetcher(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { headers: UA });
+  const res = await fetcher(`${process.env.JARVIS_SEARCH_URL ?? 'https://html.duckduckgo.com/html/'}?q=${encodeURIComponent(query)}`, { headers: UA });
   if (!res.ok) throw new Error(`Search failed (${res.status})`);
   return parseDuck(await res.text());
 }
@@ -46,4 +46,30 @@ export async function readPage(fetcher: Fetch, url: string, max = 2500): Promise
   const res = await fetcher(url, { headers: UA });
   if (!res.ok) throw new Error(`Could not open the page (${res.status})`);
   return strip(await res.text()).slice(0, max);
+}
+
+export type MusicKind = 'track' | 'album' | 'artist' | 'playlist';
+
+/** "the album Random Access Memories" -> what to look for and what kind of thing it is. */
+export function musicRequest(said: string): { query: string; kind: MusicKind | null } {
+  let q = said.trim().replace(/[.!?]+$/, '').replace(/\s+(on|in|from|using) (spotify|apple music|music)$/i, '').replace(/^(me |us )/i, '');
+  let kind: MusicKind | null = null;
+  if (/\bplaylist\b/i.test(q)) kind = 'playlist';
+  else if (/\balbum\b/i.test(q)) kind = 'album';
+  else if (/^(some|something by|music by|songs by|anything by|a bit of|the best of)\b/i.test(q) || /\b(songs|music)$/i.test(q)) kind = 'artist';
+  else if (/\b(the )?(song|track)\b/i.test(q) || /\S\s+by\s+\S/i.test(q)) kind = 'track';
+  q = q.replace(/^(the |my |a |an )?(song|track|album|playlist)( called| named)?\s+/i, '').replace(/^(some|something by|music by|songs by|anything by|a bit of|the best of)\s+/i, '').replace(/\s+(playlist|album|songs|music)$/i, '').trim();
+  if (kind === 'playlist' || kind === 'album') q = q.replace(/^(the|my) /i, '');
+  return { query: q, kind };
+}
+
+/** Pick the Spotify link that best fits from search results, as a spotify: address the app can play. */
+export function spotifyUri(hits: Hit[], kind: MusicKind | null): { uri: string; title: string; kind: MusicKind } | null {
+  const found = hits
+    .map((h) => {
+      const m = h.url.match(/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(track|album|artist|playlist)\/([A-Za-z0-9]{10,})/);
+      return m ? { uri: `spotify:${m[1]}:${m[2]}`, kind: m[1] as MusicKind, title: h.title.replace(/\s*[|\-–]\s*(Spotify|song and lyrics by.*|Album by.*|playlist by.*|Listen on Spotify).*$/i, '').trim() } : null;
+    })
+    .filter((x): x is { uri: string; kind: MusicKind; title: string } => !!x);
+  return (kind ? found.find((f) => f.kind === kind) : undefined) ?? found.find((f) => f.kind === 'track') ?? found[0] ?? null;
 }

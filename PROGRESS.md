@@ -32,7 +32,19 @@ Wants it working by 12pm UK time on 14 Nov.
 - [x] Upgrade (14 Nov, afternoon): focus sessions, habits, countdowns, routines, evening review, Hark link
       (src/brain/hark.ts reads Hark's library read-only), clipboard, summon hotkey + menu-bar icon.
       Pure logic in src/brain/life.ts. Test: `node tests/life.mjs [--llm]` (starts its own brain; 25 checks).
-- [ ] Ideas not done: Home Assistant, IMAP mail.
+- [x] Round 3 (14 Nov, evening), after Josh's first real use ("slow to respond, voice sounds manufactured"):
+      * Voice: Kokoro fp32 instead of q8 (cleaner, ~2.5x faster on CPU); padding silence trimmed from every clip
+        (was ~0.75 s per sentence) and replaced by a short gap chosen by punctuation; speech starts at the first
+        clause; chime when you stop talking; engines warmed at start.
+      * Speed: many more instant answers that skip the language model (what's playing, weather, calendar, list,
+        mail, home); shorter history and replies; per-reply stage timings ("heard / thought / voice") shown under
+        the reply so real numbers from his Mac can guide the next round.
+      * Spotify: "what song is this", "play <song/artist/album/playlist>" (finds the Spotify address through a
+        web search, then plays it by AppleScript; opens the in-app search if nothing is found).
+      * Home Assistant (src/brain/ha.ts) and IMAP mail (src/brain/imap.ts, imapflow). Secrets in secrets.json,
+        never in settings, snapshots or exports. Test: `node tests/home.mjs` (stand-in HA + IMAP servers; 31 checks).
+      * NOT verified on real hardware/services: Metal speed, real Home Assistant, real Gmail IMAP, DuckDuckGo
+        lookups for Spotify (search engine is blocked in the build container).
 
 ## How to run the tests here
 JARVIS_FAKE_MAC=1 JARVIS_DATA_DIR=/tmp/jv-data JARVIS_MODELS_DIR=/home/user/hark/scratch/models node out/main/headless.js

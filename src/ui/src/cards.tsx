@@ -196,23 +196,29 @@ export function HomeCard() {
   const home = useSnap((s) => s.home);
   const state = useSnap((s) => s.integrations.home);
   const [busy, setBusy] = useState('');
-  const run = async (name: string) => {
+  const run = async (name: string, h?: { id: string; kind?: string }) => {
     setBusy(name);
     try {
-      await call('runShortcut', { name });
-      toast(`${name}: done`);
+      if (h?.kind === 'ha') await call('tapHome', { id: h.id });
+      else (await call('runShortcut', { name }), toast(`${name}: done`));
     } catch (e) {
       toast((e as Error).message, 'alert');
     }
     setBusy('');
   };
   return (
-    <Card id="home" tab="life" label="Home" right={<span className="label dim">Shortcuts</span>}>
+    <Card id="home" tab="life" label="Home" right={<span className="label dim">{home.some((h) => h.kind === 'ha') ? `${home.filter((h) => h.on).length} on` : 'Shortcuts'}</span>}>
       {!home.length ? (
         <div className="empty"><Lightbulb size={18} /> {state.detail ?? 'Make a shortcut in the Shortcuts app (“Lounge lights”, “Movie night”) and it appears here, ready for a tap or a word.'}</div>
       ) : (
         <div className="tiles">
-          {home.map((h) => <button key={h.id} className={busy === h.name ? 'busy' : ''} onClick={() => void run(h.name)}><Zap size={15} /><span>{h.name}</span></button>)}
+          {home.map((h) => (
+            <button key={h.id} className={`${busy === h.name ? 'busy' : ''} ${h.on ? 'lit' : ''}`} onClick={() => void run(h.name, h)}>
+              {h.kind === 'ha' && (h.domain === 'light' || h.domain === 'switch') ? <Lightbulb size={15} /> : <Zap size={15} />}
+              <span className="grow">{h.name}</span>
+              {h.detail && <em>{h.detail}</em>}
+            </button>
+          ))}
         </div>
       )}
     </Card>
@@ -375,6 +381,7 @@ export function CoreCard({ compact }: { compact: boolean }) {
             {showing.heard && <p className="heard"><span className="label dim">you</span>{showing.heard}</p>}
             <p className="said">{showing.text || <span className="dots"><i /><i /><i /></span>}{!showing.done && showing.text && <span className="caret" />}</p>
             {!!showing.tools.length && <p className="tools">{showing.tools.map((t, i) => <span key={i} className={t.ok ? 'ok' : 'bad'}>{t.ok ? <Check size={11} strokeWidth={3} /> : <X size={11} />}{t.label}</span>)}</p>}
+            {showing.timing && <p className="timing mono" title="How long each stage took">{[showing.timing.asr !== undefined && `heard ${(showing.timing.asr / 1000).toFixed(1)}s`, showing.timing.think !== undefined && `thought ${(showing.timing.think / 1000).toFixed(1)}s`, showing.timing.voice !== undefined && `voice ${(showing.timing.voice / 1000).toFixed(1)}s`].filter(Boolean).join(' · ')}</p>}
           </>
         ) : (
           <div className="needs">

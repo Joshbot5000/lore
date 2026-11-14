@@ -15,7 +15,9 @@ export type Routine = { id: string; name: string; steps: string[] };
 /** A conversation recorded in Hark (read-only). */
 export type Recording = { id: string; title: string; at: number; minutes: number; overview: string; open: number };
 export type Timer = { id: string; label: string; endsAt: number; total: number };
-export type ChatMsg = { id: string; role: 'user' | 'assistant'; text: string; at: number; tools?: ToolUse[]; device?: string };
+export type ChatMsg = { id: string; role: 'user' | 'assistant'; text: string; at: number; tools?: ToolUse[]; device?: string; timing?: Timing };
+/** How long each stage of a reply took, in milliseconds (shown in the log, for tuning). */
+export type Timing = { asr?: number; think?: number; voice?: number; total?: number };
 export type ToolUse = { name: string; label: string; ok: boolean };
 
 export type CalEvent = { id: string; title: string; start: number; end: number; allDay?: boolean; where?: string; calendar?: string };
@@ -27,7 +29,10 @@ export type Weather = {
   hours: { t: number; temp: number; code: number; rain: number }[];
 };
 export type Vitals = { cpu: number; mem: number; battery?: number; charging?: boolean; uptime: number; host: string; disk?: number };
-export type HomeAction = { id: string; name: string; icon?: string };
+/** A tile on the Home card: a Shortcut, or a Home Assistant device or scene. */
+export type HomeAction = { id: string; name: string; icon?: string; kind?: 'shortcut' | 'ha'; domain?: string; on?: boolean; detail?: string };
+/** A mail account read over IMAP. The password is kept apart from settings and never sent to the interface. */
+export type MailAccount = { id: string; label: string; host: string; port: number; user: string };
 
 export type IntegrationState = 'ok' | 'off' | 'error' | 'setup';
 export type Integrations = Record<'weather' | 'calendar' | 'mail' | 'music' | 'home' | 'system' | 'hark', { state: IntegrationState; detail?: string }>;
@@ -61,12 +66,17 @@ export type Settings = {
   hotkey: string;
   /** Read conversations recorded in Hark, so Jarvis can answer questions about them. */
   useHark: boolean;
+  /** Home Assistant address, e.g. http://homeassistant.local:8123 (the access token is stored separately). */
+  haUrl: string;
+  /** Which Home Assistant devices appear on the Home card. Empty shows the first few lights, switches and scenes. */
+  haEntities: string[];
+  mailAccounts: MailAccount[];
 };
 
 export const DEFAULT_SETTINGS: Settings = {
   userName: '', address: 'name', assistantName: 'Jarvis', place: '', units: 'c', voice: 'bm_george', speed: 1.05, speak: true, wake: false,
   accent: 'arc', asrModel: 'whisper-base', llmModel: 'qwen-4b', calendarUrls: [], useAppleCalendar: true, useAppleMail: true, musicApp: 'Spotify',
-  homeShortcuts: [], currency: '£', onboarded: false, briefingHour: 8, focusGoal: 120, hotkey: 'Alt+Space', useHark: true,
+  homeShortcuts: [], currency: '£', onboarded: false, briefingHour: 8, focusGoal: 120, hotkey: 'Alt+Space', useHark: true, haUrl: '', haEntities: [], mailAccounts: [],
 };
 
 export type ModelInfo = { id: string; kind: 'asr' | 'llm' | 'voice' | 'support'; name: string; blurb: string; bytes: number; installed: boolean; recommended?: boolean };
@@ -110,8 +120,8 @@ export type Need = { id: string; tone: 'alert' | 'warn' | 'info'; text: string; 
 /** Server -> client pushes. */
 export type Push =
   | { type: 'patch'; data: Partial<Snapshot> }
-  | { type: 'say'; turn: string; delta?: string; done?: boolean; error?: string; heard?: string; tool?: ToolUse; state?: 'thinking' | 'speaking' | 'idle' }
-  | { type: 'audio'; turn: string; seq: number; wav: string; text: string; last?: boolean }
+  | { type: 'say'; turn: string; delta?: string; done?: boolean; error?: string; heard?: string; tool?: ToolUse; state?: 'thinking' | 'speaking' | 'idle'; timing?: Timing }
+  | { type: 'audio'; turn: string; seq: number; wav: string; text: string; last?: boolean; gap?: number }
   | { type: 'notify'; title: string; body: string; speak?: string }
   | { type: 'summon' };
 
