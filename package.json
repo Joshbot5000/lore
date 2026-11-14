@@ -1,0 +1,47 @@
+{
+  "name": "jarvis",
+  "version": "1.0.0",
+  "description": "Jarvis: a private, voice-first personal assistant and life dashboard that runs on your Mac and follows you to your phone.",
+  "main": "out/main/index.js",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "author": "Josh Lando",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "brain": "node out/main/brain.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run tests/unit.test.ts",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "kokoro-js": "^1.2.1",
+    "node-llama-cpp": "^3.22.3",
+    "qrcode": "^1.5.4",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "@types/node": "^26.6.6",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^6.3.0",
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^6.0.0",
+    "lucide-react": "^1.72.0",
+    "playwright-core": "^1.65.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

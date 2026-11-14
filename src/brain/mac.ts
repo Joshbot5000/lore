@@ -1,0 +1,188 @@
+/**
+ * Hands on the Mac: music, mail, calendar, Shortcuts (HomeKit), system controls. Everything goes
+ * through AppleScript / built-in command-line tools, so there is nothing to sign in to. A fake
+ * bridge with believable data stands in on other platforms and in tests.
+ */
+import { execFile } from 'node:child_process';
+import os from 'node:os';
+import type { CalEvent, Mail, NowPlaying } from '../shared/types';
+
+export type MacBridge = {
+  real: boolean;
+  music(app: 'Spotify' | 'Music'): Promise<NowPlaying | null>;
+  musicControl(app: 'Spotify' | 'Music', action: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'volume' | 'search', value?: string | number): Promise<void>;
+  mail(): Promise<{ unread: number; items: Mail[] } | null>;
+  calendar(days: number): Promise<CalEvent[] | null>;
+  shortcuts(): Promise<string[]>;
+  runShortcut(name: string): Promise<void>;
+  openApp(name: string): Promise<void>;
+  openUrl(url: string): Promise<void>;
+  setVolume(percent: number): Promise<void>;
+  battery(): Promise<{ percent: number; charging: boolean } | null>;
+  system(action: 'lock' | 'sleep-display' | 'dark-mode' | 'mute' | 'unmute'): Promise<void>;
+};
+
+const run = (cmd: string, args: string[], timeout = 15000): Promise<string> =>
+  new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout, maxBuffer: 4e6 }, (err, stdout, stderr) => (err ? reject(new Error((stderr || err.message).trim().split('\n')[0])) : resolve(stdout.trim())));
+  });
+const osa = (script: string, timeout?: number): Promise<string> => run('osascript', ['-e', script], timeout);
+const q = (s: string): string => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+const F = String.fromCharCode(30), R = String.fromCharCode(31);
+const SEP = `set f to (ASCII character 30)\nset r to (ASCII character 31)\n`;
+
+export const realMac: MacBridge = {
+  real: true,
+
+  async music(app) {
+    const track =
+      app === 'Spotify'
+        ? `(name of t) & f & (artist of t) & f & (album of t) & f & (artwork url of t) & f & (player position) & f & ((duration of t) / 1000) & f & (sound volume)`
+        : `(name of t) & f & (artist of t) & f & (album of t) & f & "" & f & (player position) & f & (duration of t) & f & (sound volume)`;
+    const out = await osa(`${SEP}if application ${q(app)} is running then
+  tell application ${q(app)}
+    set st to (player state as string)
+    if st is "stopped" then return "stopped"
+    set t to current track
+    return st & f & ${track}
+  end tell
+else
+  return "off"
+end if`);
+    if (out === 'off') return null;
+    if (out === 'stopped') return { app, state: 'stopped' };
+    const [st, title, artist, album, art, pos, dur, vol] = out.split(F);
+    return { app, state: st === 'playing' ? 'playing' : 'paused', title, artist, album, art: art || undefined, position: parseFloat(pos.replace(',', '.')) || 0, duration: parseFloat(dur.replace(',', '.')) || 0, volume: parseInt(vol, 10) || 0 };
+  },
+
+  async musicControl(app, action, value) {
+    if (action === 'search') {
+      const term = encodeURIComponent(String(value ?? ''));
+      await run('open', [app === 'Spotify' ? `spotify:search:${term}` : `music://music.apple.com/search?term=${term}`]);
+      return;
+    }
+    const verb = { play: 'play', pause: 'pause', toggle: 'playpause', next: 'next track', previous: 'previous track', volume: `set sound volume to ${Math.max(0, Math.min(100, Math.round(Number(value) || 0)))}` }[action];
+    await osa(`tell application ${q(app)} to ${verb}`);
+  },
+
+  async mail() {
+    const out = await osa(
+      `${SEP}if application "Mail" is running then
+  tell application "Mail"
+    set n to unread count of inbox
+    set out to ""
+    set msgs to (messages of inbox whose read status is false)
+    set c to count of msgs
+    if c > 12 then set c to 12
+    repeat with i from 1 to c
+      set m to item i of msgs
+      set out to out & (id of m) & f & (sender of m) & f & (subject of m) & f & ((date received of m) as «class isot» as string) & r
+    end repeat
+    return (n as string) & r & out
+  end tell
+else
+  return "off"
+end if`,
+      30000,
+    );
+    if (out === 'off') return null;
+    const [n, ...rows] = out.split(R);
+    return {
+      unread: parseInt(n, 10) || 0,
+      items: rows.filter(Boolean).map((row) => {
+        const [id, from, subject, date] = row.split(F);
+        return { id, from: from.replace(/\s*<[^>]+>\s*$/, '').replace(/^"|"$/g, '') || from, subject, at: Date.parse(date) || Date.now() };
+      }),
+    };
+  },
+
+  async calendar(days) {
+    const out = await osa(
+      `${SEP}tell application "Calendar"
+  set t0 to (current date)
+  set t1 to t0 + (${days} * days)
+  set out to ""
+  repeat with c in calendars
+    try
+      set evs to (every event of c whose start date ≥ t0 and start date ≤ t1)
+      repeat with e in evs
+        set out to out & (uid of e) & f & (summary of e) & f & ((start date of e) as «class isot» as string) & f & ((end date of e) as «class isot» as string) & f & (allday event of e) & f & (name of c) & r
+      end repeat
+    end try
+  end repeat
+  return out
+end tell`,
+      45000,
+    );
+    return out.split(R).filter(Boolean).map((row) => {
+      const [id, title, start, end, allDay, calendar] = row.split(F);
+      return { id, title, start: Date.parse(start), end: Date.parse(end), allDay: allDay === 'true', calendar };
+    }).filter((e) => !Number.isNaN(e.start));
+  },
+
+  shortcuts: async () => (await run('shortcuts', ['list'])).split('\n').map((s) => s.trim()).filter(Boolean),
+  runShortcut: async (name) => void (await run('shortcuts', ['run', name], 60000)),
+  openApp: async (name) => void (await run('open', ['-a', name])),
+  openUrl: async (url) => void (await run('open', [url])),
+  setVolume: async (percent) => void (await osa(`set volume output volume ${Math.max(0, Math.min(100, Math.round(percent)))}`)),
+
+  async battery() {
+    const out = await run('pmset', ['-g', 'batt']);
+    const m = out.match(/(\d+)%;\s*([a-z ]+);/i);
+    return m ? { percent: +m[1], charging: !/discharging/i.test(m[2]) } : null;
+  },
+
+  async system(action) {
+    if (action === 'lock' || action === 'sleep-display') await run('pmset', ['displaysleepnow']);
+    else if (action === 'dark-mode') await osa('tell application "System Events" to tell appearance preferences to set dark mode to not dark mode');
+    else await osa(`set volume output muted ${action === 'mute'}`);
+  },
+};
+
+/** Stand-in used off the Mac and in tests: behaves like a small, stateful Mac. */
+export function fakeMac(): MacBridge {
+  const now = () => Date.now();
+  const tracks = [['Midnight City', 'M83', "Hurry Up, We're Dreaming"], ['Intro', 'The xx', 'xx'], ['Time', 'Hans Zimmer', 'Inception']];
+  let i = 0, state: NowPlaying['state'] = 'paused', volume = 55, started = now();
+  const day = (d: number, h: number, m = 0) => {
+    const t = new Date();
+    t.setDate(t.getDate() + d);
+    t.setHours(h, m, 0, 0);
+    return t.getTime();
+  };
+  return {
+    real: false,
+    music: async (app) => ({ app, state, title: tracks[i][0], artist: tracks[i][1], album: tracks[i][2], position: state === 'playing' ? ((now() - started) / 1000) % 240 : 42, duration: 240, volume }),
+    async musicControl(_app, action, value) {
+      if (action === 'play') state = 'playing';
+      else if (action === 'pause') state = 'paused';
+      else if (action === 'toggle') state = state === 'playing' ? 'paused' : 'playing';
+      else if (action === 'next') i = (i + 1) % tracks.length;
+      else if (action === 'previous') i = (i + tracks.length - 1) % tracks.length;
+      else if (action === 'volume') volume = Number(value) || 0;
+      if (state === 'playing') started = now();
+    },
+    mail: async () => ({
+      unread: 3,
+      items: [
+        { id: '1', from: 'Dr Patel', subject: 'Seminar moved to Thursday 2pm', at: now() - 36e5 },
+        { id: '2', from: 'Octopus Energy', subject: 'Your November statement is ready', at: now() - 5 * 36e5 },
+        { id: '3', from: 'Sam', subject: 'Five-a-side on Sunday?', at: now() - 9 * 36e5 },
+      ],
+    }),
+    calendar: async () => [
+      { id: 'e1', title: 'Contract law seminar', start: day(0, 14), end: day(0, 15, 30), calendar: 'Uni' },
+      { id: 'e2', title: 'Gym', start: day(1, 7, 30), end: day(1, 8, 30), calendar: 'Home' },
+      { id: 'e3', title: 'Dinner with family', start: day(2, 18, 45), end: day(2, 21), calendar: 'Home' },
+    ],
+    shortcuts: async () => ['Lounge lights', 'Movie night', 'Good night', 'Heating boost'],
+    runShortcut: async () => undefined,
+    openApp: async () => undefined,
+    openUrl: async () => undefined,
+    setVolume: async (p) => void (volume = p),
+    battery: async () => ({ percent: 82, charging: false }),
+    system: async () => undefined,
+  };
+}
+
+export const pickMac = (): MacBridge => (process.env.JARVIS_FAKE_MAC || os.platform() !== 'darwin' ? fakeMac() : realMac);
