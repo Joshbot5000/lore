@@ -47,6 +47,17 @@ const str = (properties: Record<string, string>, required: string[] = Object.key
   required,
 });
 
+const COMMAND = /^(?:please |then |also )?(open|launch|set|start|play|pause|resume|stop|skip|turn|remind|add|put|run|mute|unmute|lock|note|make a note|take a note|remember|track|schedule|book|close|switch|search|look up|tell me|what|who|when|where|how)\b/i;
+
+/** Split "do X and do Y" into its two requests, but leave "bread and butter" alone. */
+export function splitCommands(text: string): string[] {
+  const parts = text.split(/\s*(?:,\s*(?:and\s+)?(?:then\s+)?|\s+and\s+(?:then\s+)?|\s+then\s+|;\s*)(?=\S)/i);
+  if (parts.length < 2 || parts.length > 4) return [text];
+  // Every piece must itself read as a request, and the first must be an action (not a question about two things).
+  if (!parts.every((p) => COMMAND.test(p.trim())) || /^(what|who|when|where|how|tell me)\b/i.test(parts[0].trim())) return [text];
+  return parts.map((p) => p.trim().replace(/[.!]+$/, ''));
+}
+
 export class Brain extends EventEmitter {
   readonly store: Store;
   readonly models: Models;
@@ -74,7 +85,6 @@ export class Brain extends EventEmitter {
   private turnSeq = 0;
   private activeTurn = '';
   private intervals: ReturnType<typeof setInterval>[] = [];
-  private toolRuns = new Map<string, ToolUse[]>();
   private announced = new Set<string>();
   readonly ramGb = Math.round(os.totalmem() / 2 ** 30);
 
@@ -627,6 +637,8 @@ export class Brain extends EventEmitter {
       {
         name: 'web_search', description: 'Look something up on the internet: current facts, news, people, definitions. Use it when you are not sure.', params: str({ query: 'What to search for' }), label: ({ query }) => `Searched “${query}”`,
         run: async ({ query }) => {
+          // Never send the user's own name out to a search engine.
+          if (s.userName && new RegExp(`\\b${s.userName.split(' ')[0]}\\b`, 'i').test(String(query))) return 'Do not search the web for the user\'s personal details. Answer from the context and your memory instead.';
           const [hits, wiki] = await Promise.all([webSearch(this.o.fetch, String(query)).catch(() => []), wikipedia(this.o.fetch, String(query)).catch(() => null)]);
           const parts = [wiki ? `Wikipedia (${wiki.title}): ${wiki.extract.slice(0, 600)}` : '', ...hits.slice(0, 4).map((h) => `${h.title}: ${h.snippet}`)].filter(Boolean);
           if (!parts.length && hits[0]) parts.push(await readPage(this.o.fetch, hits[0].url).catch(() => ''));
@@ -678,7 +690,7 @@ export class Brain extends EventEmitter {
 
 Your replies are spoken aloud, so write the way a person talks: one to three short sentences, plain words, no lists, no markdown, no emoji. Give the answer first. Never read out raw data such as URLs or IDs.
 
-Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. If they ask for two things, call a tool for each one. Use web_search for facts you are not sure of. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
+Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. If they ask for two things, call a tool for each one. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
   }
 
   /** Instant answers for the simplest commands: no need to wake the language model. */
@@ -818,77 +830,108 @@ Each request comes with a <context> block. It is your live view of their world: 
     const speak = this.settings.speak;
     let reply = '';
     const uses: ToolUse[] = [];
-    this.toolRuns.set(turn, uses);
     try {
-      const fast = await this.quick(text).catch(() => null);
-      if (fast) {
-        reply = fast.reply;
-        if (fast.tool) (uses.push(fast.tool), this.push({ type: 'say', turn, tool: fast.tool }));
-        this.push({ type: 'say', turn, delta: reply, state: 'speaking' });
-        if (speak) void this.speakOut(turn, reply, true);
-      } else {
-        await this.ensureLlm();
-        const tools = this.tools();
-        let pending = '';
-        const onChunk = (c: { streamId: string; delta: string }) => {
-          if (c.streamId !== turn || this.activeTurn !== turn) return;
-          reply += c.delta;
-          this.push({ type: 'say', turn, delta: c.delta, state: 'speaking' });
-          if (!speak) return;
-          const cut = takeSentences(pending + c.delta);
-          pending = cut.rest;
-          for (const sentence of cut.sentences) void this.speakOut(turn, sentence);
-        };
-        const onTool = async (c: { streamId: string; callId: string; name: string; args: any }) => {
-          if (c.streamId !== turn) return;
-          const tool = tools.find((t) => t.name === c.name);
-          let result = 'Unknown tool.';
-          let ok = false;
-          try {
-            if (tool) (result = await tool.run(c.args ?? {})), (ok = true);
-          } catch (err) {
-            result = `That failed: ${(err as Error).message}`;
-          }
-          const use = { name: c.name, label: tool ? (ok ? tool.label(c.args ?? {}) : `${c.name} failed`) : c.name, ok };
-          uses.push(use);
-          this.push({ type: 'say', turn, tool: use });
-          await this.llm.call('toolResult', { callId: c.callId, result }).catch(() => undefined);
-        };
-        this.llm.on('chunk', onChunk);
-        this.llm.on('tool', onTool);
-        try {
-          const final = await this.llm.call<string>('generate', {
-            streamId: turn,
-            system: this.persona(),
-            history,
-            prompt: `<context>\n${await this.context(text)}\n</context>\n\n${text}`,
-            tools: tools.map(({ name, description, params }) => ({ name, description, params })),
-            maxTokens: 500,
-            temperature: 0.5,
-          });
-          if (final && final.length > reply.trim().length) reply = final;
-        } finally {
-          this.llm.off('chunk', onChunk);
-          this.llm.off('tool', onTool);
-        }
-        reply = reply.replace(/\s*\n+\s*/g, ' ').trim() || (uses.some((u) => u.ok) ? 'Done.' : "I'm not sure what to say to that.");
-        if (speak) void this.speakOut(turn, pending.trim() ? pending : uses.length && !reply.includes(pending) ? reply : '', true);
+      // "Turn the volume down and open Safari" is two requests: handle each on its own, so neither is dropped.
+      for (const part of splitCommands(text)) {
+        if (this.activeTurn !== turn) break;
+        const lead = reply ? ' ' : '';
+        const piece = await this.answer(turn, part, history, uses, speak, lead);
+        reply += lead + piece;
       }
     } catch (err) {
-      reply = /not been downloaded/.test(String(err)) ? "My language model isn't installed yet. Open Settings and I'll download it." : `Something went wrong on my side: ${(err as Error).message}`;
-      this.push({ type: 'say', turn, delta: reply, error: (err as Error).message });
-      if (speak) void this.speakOut(turn, reply, true);
+      const sorry = /not been downloaded/.test(String(err)) ? "My language model isn't installed yet. Open Settings and I'll download it." : `Something went wrong on my side: ${(err as Error).message}`;
+      this.push({ type: 'say', turn, delta: (reply ? ' ' : '') + sorry, error: (err as Error).message });
+      if (speak) void this.speakOut(turn, sorry);
+      reply += (reply ? ' ' : '') + sorry;
     }
+    if (speak) void this.speakOut(turn, '', true);
     const msg: ChatMsg = { id: uid(), role: 'assistant', text: reply, at: Date.now(), tools: uses.length ? uses : undefined };
     chat.push(msg);
     this.store.touch('chat');
-    this.toolRuns.delete(turn);
     this.push({ type: 'say', turn, done: true, state: 'idle' });
     this.patch({ chat: chat.slice(-60) });
-    if (this.activeTurn === turn) this.activeTurn = speak ? turn : '';
+    if (this.activeTurn === turn && !speak) this.activeTurn = '';
     // Commands are not facts about the person: only learn from conversation (or an explicit "remember").
     if (!uses.length || /\bremember\b/i.test(text)) void this.learn(text);
     return msg;
+  }
+
+  /** Answer one request: instantly if it is an everyday command, otherwise with the language model and its tools. */
+  private async answer(turn: string, text: string, history: { role: 'user' | 'assistant'; text: string }[], uses: ToolUse[], speak: boolean, lead: string): Promise<string> {
+    const fast = await this.quick(text).catch(() => null);
+    if (fast) {
+      if (fast.tool) (uses.push(fast.tool), this.push({ type: 'say', turn, tool: fast.tool }));
+      this.push({ type: 'say', turn, delta: lead + fast.reply, state: 'speaking' });
+      if (speak) void this.speakOut(turn, fast.reply);
+      return fast.reply;
+    }
+    await this.ensureLlm();
+    const tools = this.tools();
+    let reply = '';
+    let pending = '';
+    let first = true;
+    const before = uses.length;
+    const onChunk = (c: { streamId: string; delta: string }) => {
+      if (c.streamId !== turn || this.activeTurn !== turn) return;
+      reply += c.delta;
+      this.push({ type: 'say', turn, delta: (first ? lead : '') + c.delta, state: 'speaking' });
+      first = false;
+      if (!speak) return;
+      const cut = takeSentences(pending + c.delta);
+      pending = cut.rest;
+      for (const sentence of cut.sentences) void this.speakOut(turn, sentence);
+    };
+    const done = new Set<string>();
+    const onTool = async (c: { streamId: string; callId: string; name: string; args: any }) => {
+      if (c.streamId !== turn) return;
+      const tool = tools.find((t) => t.name === c.name);
+      let result = 'Unknown tool.';
+      let ok = false;
+      const sig = `${c.name}:${JSON.stringify(c.args ?? {})}`;
+      try {
+        if (tool && done.has(sig)) {
+          // The model repeated itself. Don't act twice.
+          await this.llm.call('toolResult', { callId: c.callId, result: 'That was already done a moment ago.' }).catch(() => undefined);
+          return;
+        }
+        done.add(sig);
+        if (tool) (result = await tool.run(c.args ?? {})), (ok = true);
+      } catch (err) {
+        result = `That failed: ${(err as Error).message}`;
+      }
+      const use = { name: c.name, label: tool ? (ok ? tool.label(c.args ?? {}) : `${c.name} failed`) : c.name, ok };
+      uses.push(use);
+      this.push({ type: 'say', turn, tool: use });
+      await this.llm.call('toolResult', { callId: c.callId, result }).catch(() => undefined);
+    };
+    this.llm.on('chunk', onChunk);
+    this.llm.on('tool', onTool);
+    try {
+      const final = await this.llm.call<string>('generate', {
+        streamId: turn,
+        system: this.persona(),
+        history,
+        prompt: `<context>\n${await this.context(text)}\n</context>\n\n${text}`,
+        tools: tools.map(({ name, description, params }) => ({ name, description, params })),
+        maxTokens: 500,
+        temperature: 0.5,
+      });
+      if (final && final.length > reply.trim().length && !reply.trim()) {
+        reply = final;
+        this.push({ type: 'say', turn, delta: lead + final, state: 'speaking' });
+        pending = final;
+      }
+    } finally {
+      this.llm.off('chunk', onChunk);
+      this.llm.off('tool', onTool);
+    }
+    if (!reply.trim()) {
+      reply = uses.length > before && uses.slice(before).some((u) => u.ok) ? 'Done.' : "I'm not sure what to say to that.";
+      this.push({ type: 'say', turn, delta: lead + reply, state: 'speaking' });
+      pending = reply;
+    }
+    if (speak && pending.trim()) void this.speakOut(turn, pending);
+    return reply.replace(/\s*\n+\s*/g, ' ').trim();
   }
 
   /** The morning briefing: built from real data, so it is instant and never made up. */

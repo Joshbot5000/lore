@@ -3,6 +3,7 @@ import { describeWhen, parseWhen, speakable, takeSentences } from '../src/shared
 import { expand, parseIcs } from '../src/brain/ics';
 import { parseForecast, weatherSentence } from '../src/brain/weather';
 import { parseDuck } from '../src/brain/web';
+import { splitCommands } from '../src/brain/brain';
 
 const now = new Date(2026, 10, 14, 8, 40); // Saturday 14 Nov 2026, 08:40
 const at = (s: string) => { const t = parseWhen(s, now); return t === null ? null : new Date(t).toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); };
@@ -71,5 +72,15 @@ describe('weather and web parsing', () => {
   it('reads search results', () => {
     const hits = parseDuck('<div class="result"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa&amp;rut=1">Example <b>Title</b></a><a class="result__snippet" href="x">A <b>short</b> snippet.</a></div>');
     expect(hits).toEqual([{ title: 'Example Title', snippet: 'A short snippet.', url: 'https://example.com/a' }]);
+  });
+});
+
+describe('compound commands', () => {
+  it('splits two requests and leaves ordinary sentences alone', () => {
+    expect(splitCommands('Turn the volume down to 30 and open Safari')).toEqual(['Turn the volume down to 30', 'open Safari']);
+    expect(splitCommands('Play some music, then set a timer for five minutes.')).toEqual(['Play some music', 'set a timer for five minutes']);
+    expect(splitCommands('Remind me to buy bread and butter')).toEqual(['Remind me to buy bread and butter']);
+    expect(splitCommands("What's on my calendar today, and do I have any unread emails?")).toHaveLength(1);
+    expect(splitCommands('Add milk to my list and remind me to call mum tomorrow at 5')).toEqual(['Add milk to my list', 'remind me to call mum tomorrow at 5']);
   });
 });
