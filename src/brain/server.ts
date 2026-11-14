@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
+import QRCode from 'qrcode';
 import type { Brain } from './brain';
 import type { Push } from '../shared/types';
 
@@ -51,7 +52,10 @@ export function serveBrain(brain: Brain, opts: { port: number; uiDir: string; ho
         } catch {
           return;
         }
-        const fn = msg.method === 'snapshot' ? () => brain.snapshot(lanAddresses()) : brain.actions[msg.method ?? ''];
+        const fn =
+          msg.method === 'snapshot' ? () => brain.snapshot(lanAddresses())
+          : msg.method === 'qr' ? (p: { url: string }) => QRCode.toDataURL(p.url, { margin: 1, width: 440, color: { dark: '#05070bff', light: '#ffffffff' } })
+          : brain.actions[msg.method ?? ''];
         if (!fn) return void ws.send(JSON.stringify({ id: msg.id, error: `Unknown action ${msg.method}` }));
         try {
           const result = await fn({ ...(msg.params ?? {}), device });
