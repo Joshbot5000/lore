@@ -237,7 +237,7 @@ export class Brain extends EventEmitter {
     if (this.llmLoaded === id && this.llm.running && this.llmInfo) return this.llmInfo;
     this.refreshStatus({ llm: 'loading' });
     try {
-      this.llmInfo = await this.llm.call('load', { modelPath: process.env.JARVIS_LLM_FILE || this.models.llmPath(id), contextSize: this.ramGb >= 14 ? 8192 : 6144 });
+      this.llmInfo = await this.llm.call('load', { modelPath: process.env.JARVIS_LLM_FILE || this.models.llmPath(id), contextSize: this.ramGb >= 14 ? 8192 : this.ramGb >= 10 ? 6144 : 4096 });
       this.llmLoaded = id;
       this.refreshStatus({ llm: 'ready', gpu: this.llmInfo!.gpu });
       // Read the standing instructions once now, so the first real question does not pay for it.
