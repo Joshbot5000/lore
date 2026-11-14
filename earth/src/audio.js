@@ -11,14 +11,14 @@ export class Audio {
     // continuous layers: wind, rain, engine, siren, jets, rotor
     this.windL = this.loopNoise('bandpass', 500, 0.6); this.rainL = this.loopNoise('highpass', 2500, 0.3); this.jetL = this.loopNoise('lowpass', 900, 0.8); this.heliL = this.loopNoise('lowpass', 160, 1);
     this.eng = this.osc('sawtooth', 60); this.eng2 = this.osc('square', 30); this.sir = this.osc('triangle', 700);
-    this.engT = 0; this.heliT = 0; this.sirOn = false;
+    this.engT = 0; this.heliT = 0; this.heliV = 0; this.sirOn = false;
   }
   loopNoise(type, f, q) { const c = this.ctx, s = c.createBufferSource(); s.buffer = this.nb; s.loop = true; const fl = c.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q; const g = c.createGain(); g.gain.value = 0; s.connect(fl); fl.connect(g); g.connect(this.out); s.start(); return { g, fl }; }
   osc(type, f) { const c = this.ctx, o = c.createOscillator(); o.type = type; o.frequency.value = f; const fl = c.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = 900; const g = c.createGain(); g.gain.value = 0; o.connect(fl); fl.connect(g); g.connect(this.out); o.start(); return { o, g }; }
   vol(p) { return p && G.player ? 1 / (1 + G.player.pos.distanceTo(p) / 18) : 1; }
   tone(f, dur, type = 'sine', v = 0.2, to = null) { const c = this.ctx; if (!c) return; const o = c.createOscillator(), g = c.createGain(), t = c.currentTime; o.type = type; o.frequency.setValueAtTime(f, t); if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); o.connect(g); g.connect(this.out); o.start(t); o.stop(t + dur); }
   noise(dur, v = 0.3, f = 1000, type = 'lowpass', to = null) { const c = this.ctx; if (!c) return; const s = c.createBufferSource(), fl = c.createBiquadFilter(), g = c.createGain(), t = c.currentTime; s.buffer = this.nb; fl.type = type; fl.frequency.setValueAtTime(f, t); if (to) fl.frequency.exponentialRampToValueAtTime(to, t + dur); g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur); s.connect(fl); fl.connect(g); g.connect(this.out); s.start(t, Math.random()); s.stop(t + dur); }
-  set(param, v, k = 0.1) { if (this.ctx) param.setTargetAtTime(v, this.ctx.currentTime, k); }
+  set(param, v, k = 0.1) { if (this.ctx && isFinite(v)) param.setTargetAtTime(v, this.ctx.currentTime, k); }
   thwip() { this.noise(0.16, 0.25, 3000, 'bandpass', 900); this.tone(900, 0.1, 'sine', 0.08, 300); }
   whoosh(k = 1) { this.noise(0.3, 0.16 * k, 500, 'bandpass', 1800); }
   jump() { this.tone(220, 0.14, 'sine', 0.1, 420); }
