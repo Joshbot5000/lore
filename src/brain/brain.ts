@@ -13,7 +13,10 @@ import { forecast, geocode, weatherSentence, type Fetch } from './weather';
 import { expand, parseIcs } from './ics';
 import { readPage, webSearch, wikipedia } from './web';
 import { describeWhen, parseWhen, speakable, takeSentences } from '../shared/when';
+import { dayKey, daysUntil, doneToday, focusStats, inDays, isFocusStop, matchCountdown, matchHabit, parseFocus, spokenMinutes, streak, tidy } from './life';
+import { aboutRecordings, defaultHarkDir, harkContext, namesRecording, readHark, type HarkRec } from './hark';
 import { uid } from '../shared/types';
+import type { Focus, FocusNow, Habit, Recording, Routine } from '../shared/types';
 import type { CalEvent, ChatMsg, EngineStatus, HomeAction, Integrations, Mail, Memory, Need, NowPlaying, Push, Settings, Snapshot, Task, Timer, ToolUse, Vitals, Weather } from '../shared/types';
 
 export type BrainOptions = {
@@ -26,6 +29,8 @@ export type BrainOptions = {
   version: string;
   port: number;
   notify?: (title: string, body: string) => void;
+  /** Where Hark keeps its library, if not in the usual place. */
+  harkDir?: string;
 };
 
 type Tool = {
@@ -87,8 +92,10 @@ export class Brain extends EventEmitter {
   private timers: Timer[] = [];
   private vitals: Vitals = { cpu: 0, mem: 0, uptime: 0, host: os.hostname().replace(/\.local$/, '') };
   private integrations: Integrations = {
-    weather: { state: 'setup' }, calendar: { state: 'off' }, mail: { state: 'off' }, music: { state: 'off' }, home: { state: 'off' }, system: { state: 'ok' },
+    weather: { state: 'setup' }, calendar: { state: 'off' }, mail: { state: 'off' }, music: { state: 'off' }, home: { state: 'off' }, system: { state: 'ok' }, hark: { state: 'off' },
   };
+  private focusNow: FocusNow | null = null;
+  private recordings: HarkRec[] = [];
   private lastCpu = os.cpus().map((c) => c.times);
   private turnSeq = 0;
   private activeTurn = '';
@@ -150,6 +157,7 @@ export class Brain extends EventEmitter {
     every(10 * 60e3, () => this.refreshCalendar());
     every(10 * 60e3, () => this.refreshHome());
     every(5e3, () => this.refreshVitals());
+    every(120e3, () => this.refreshHark());
     every(1e3, () => this.tick());
   }
 
@@ -331,6 +339,123 @@ export class Brain extends EventEmitter {
     }
   }
 
+  private get harkDir(): string {
+    return this.o.harkDir || process.env.JARVIS_HARK_DIR || defaultHarkDir();
+  }
+
+  /** Look at Hark's library (read-only), so questions about recorded conversations can be answered. */
+  refreshHark(): void {
+    if (!this.settings.useHark) {
+      this.recordings = [];
+      this.patch({ recordings: [] });
+      return this.setIntegration('hark', 'off', 'Turned off in Settings');
+    }
+    const recs = readHark(this.harkDir);
+    if (!recs) {
+      this.recordings = [];
+      return this.setIntegration('hark', 'off', 'Hark is not installed on this computer');
+    }
+    const changed = JSON.stringify(recs) !== JSON.stringify(this.recordings);
+    this.recordings = recs;
+    this.setIntegration('hark', 'ok', `${recs.length} recording${recs.length === 1 ? '' : 's'}`);
+    if (changed) this.patch({ recordings: this.recordingList(), needs: this.needs() });
+  }
+
+  /** Is this question about something recorded in Hark? */
+  private aboutHark(q: string): boolean {
+    return this.recordings.length > 0 && (aboutRecordings(q) || namesRecording(this.recordings, q));
+  }
+
+  private recordingList(): Recording[] {
+    return this.recordings.slice(0, 8).map((r) => ({ id: r.id, title: r.title, at: r.at, minutes: r.minutes, overview: r.overview, open: r.actions.filter((a) => !a.done).length }));
+  }
+
+  // ------------------------------------------------------------------ focus, habits, countdowns
+
+  private recentFocus(): Focus[] {
+    const from = Date.now() - 30 * 864e5;
+    return this.store.get('focus').filter((f) => f.start >= from);
+  }
+
+  startFocus(minutes: number, subject = ''): FocusNow {
+    if (this.focusNow) this.endFocus();
+    const now = Date.now();
+    const ms = Math.max(0.01, Math.min(240, Number(minutes) || 25)) * 6e4;
+    this.focusNow = { id: uid(), subject: subject.trim(), start: now, endsAt: now + ms, total: ms };
+    this.patch({ focusNow: this.focusNow });
+    return this.focusNow;
+  }
+
+  /** Stop the running session and log the time actually spent. Returns a sentence about it. */
+  endFocus(): string {
+    const f = this.focusNow;
+    if (!f) return 'No focus session is running.';
+    this.focusNow = null;
+    const mins = Math.round((Math.min(Date.now(), f.endsAt) - f.start) / 6e4);
+    if (mins >= 1) {
+      this.store.get('focus').push({ id: f.id, subject: f.subject, start: f.start, minutes: mins });
+      this.store.touch('focus');
+    }
+    this.patch({ focusNow: null, focus: this.recentFocus() });
+    if (mins < 1) return 'Session cancelled, nothing logged.';
+    const today = focusStats(this.store.get('focus')).today;
+    return `${spokenMinutes(mins)}${f.subject ? ` on ${f.subject}` : ''} logged${today > mins ? `, ${spokenMinutes(today)} today in all` : ''}.`;
+  }
+
+  private habitsText(): string {
+    const habits = this.store.get('habits');
+    if (!habits.length) return 'You are not tracking any habits yet. Say "add a habit" and its name to start one.';
+    const left = habits.filter((h) => !doneToday(h));
+    const best = [...habits].sort((a, b) => streak(b.days) - streak(a.days))[0];
+    const lead = left.length ? `${habits.length - left.length} of ${habits.length} done today. Still to do: ${left.map((h) => h.name.toLowerCase()).join(', ')}.` : `All ${habits.length} habit${habits.length === 1 ? '' : 's'} done today.`;
+    return streak(best.days) > 1 ? `${lead} Your longest streak is ${best.name.toLowerCase()}, at ${streak(best.days)} days.` : lead;
+  }
+
+  private setHabit(h: Habit, done: boolean): void {
+    const k = dayKey();
+    if (done && !h.days.includes(k)) h.days.push(k);
+    if (!done) h.days = h.days.filter((d) => d !== k);
+    if (h.days.length > 800) h.days = h.days.slice(-800);
+    this.store.touch('habits');
+    this.patch({ habits: this.store.get('habits'), needs: this.needs() });
+  }
+
+  private matchRoutine(text: string): Routine | undefined {
+    const t = text.toLowerCase().replace(/[.!?,]/g, '').replace(new RegExp(`^(hey |ok |okay )?${this.settings.assistantName.toLowerCase()}\\s*`), '').replace(new RegExp(`\\s*${this.settings.assistantName.toLowerCase()}$`), '')
+      .replace(/^(please )?(run|start|do|begin|play) (my |the )?/, '').replace(/ routine$/, '').trim();
+    return t ? this.store.get('routines').find((r) => r.name.toLowerCase().replace(/[.!?,]/g, '').trim() === t && r.steps.length > 0) : undefined;
+  }
+
+  /** The evening review: what got done today and what tomorrow holds. Built from real data. */
+  reviewText(): string {
+    const now = Date.now();
+    const start = new Date().setHours(0, 0, 0, 0);
+    const P: string[] = [`Here's your day, ${this.you()}.`];
+    const tasks = this.store.get('tasks');
+    const done = tasks.filter((t) => t.done && (t.doneAt ?? 0) >= start);
+    P.push(done.length ? `You finished ${done.length === 1 ? 'one task' : `${done.length} tasks`}${done.length <= 3 ? `: ${done.map((t) => t.title.toLowerCase()).join(', ')}` : `, including ${done[0].title.toLowerCase()}`}.` : 'No tasks were ticked off today.');
+    const fs = focusStats(this.store.get('focus'));
+    const goal = this.settings.focusGoal;
+    if (fs.today) P.push(`You focused for ${spokenMinutes(fs.today)}${goal ? (fs.today >= goal ? ', which meets your goal' : `, ${spokenMinutes(goal - fs.today)} short of your goal`) : ''}.`);
+    const habits = this.store.get('habits');
+    if (habits.length) {
+      const left = habits.filter((h) => !doneToday(h));
+      P.push(left.length ? `${habits.length - left.length} of ${habits.length} habits done. Still open: ${left.map((h) => h.name.toLowerCase()).join(', ')}.` : 'Every habit is done, so your streaks are safe.');
+    }
+    const overdue = tasks.filter((t) => !t.done && t.due && t.due < now);
+    if (overdue.length) P.push(`${overdue.length === 1 ? 'One task is' : `${overdue.length} tasks are`} still overdue.`);
+    const tStart = start + 864e5, tEnd = start + 2 * 864e5;
+    const tomorrow = this.events.filter((e) => e.start >= tStart && e.start < tEnd);
+    const dueTomorrow = tasks.filter((t) => !t.done && t.due && t.due >= tStart && t.due < tEnd);
+    if (tomorrow.length) P.push(`Tomorrow starts with ${tomorrow[0].title}${tomorrow[0].allDay ? '' : ' at ' + new Date(tomorrow[0].start).toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(':00', '').replace(' ', '')}${tomorrow.length > 1 ? `, with ${tomorrow.length - 1} more after it` : ''}.`);
+    else P.push('Nothing is in the calendar for tomorrow.');
+    if (dueTomorrow.length) P.push(`Due tomorrow: ${dueTomorrow.slice(0, 3).map((t) => t.title.toLowerCase()).join(', ')}.`);
+    const soon = this.store.get('countdowns').filter((c) => daysUntil(c.date) >= 0 && daysUntil(c.date) <= 7).sort((a, b) => a.date - b.date)[0];
+    if (soon) P.push(`${soon.title} is ${inDays(daysUntil(soon.date))}.`);
+    P.push(['Rest well.', 'That is the day done.', 'Sleep well.'][new Date().getDate() % 3]);
+    return P.join(' ');
+  }
+
   private batteryAt = 0;
   async refreshVitals(): Promise<void> {
     const now = os.cpus().map((c) => c.times);
@@ -359,6 +484,10 @@ export class Brain extends EventEmitter {
       this.timers = this.timers.filter((t) => t.endsAt > now);
       this.patch({ timers: this.timers });
       for (const t of done) this.announce(`${t.label || 'Timer'} finished`, `Your ${t.label ? t.label + ' ' : ''}timer is up.`, `${this.you()}, your ${t.label ? t.label + ' ' : ''}timer is up.`);
+    }
+    if (this.focusNow && this.focusNow.endsAt <= now) {
+      const msg = this.endFocus();
+      this.announce('Focus session complete', msg, `Time's up, ${this.you()}. ${msg} Take a break.`);
     }
     for (const t of this.store.get('tasks')) {
       if (!t.done && t.due && t.due <= now && !t.notified) {
@@ -408,16 +537,22 @@ export class Brain extends EventEmitter {
     const dom = new Date().getDate();
     const bill = this.store.get('money').find((m) => m.kind === 'bill' && m.every === 'month' && m.day && m.day - dom >= 0 && m.day - dom <= 2);
     if (bill) out.push({ id: 'bill', tone: 'warn', text: `${bill.name} (${s.currency}${bill.amount}) is due ${bill.day === dom ? 'today' : `in ${bill.day! - dom} day${bill.day! - dom === 1 ? '' : 's'}`}` });
+    for (const c of this.store.get('countdowns').filter((x) => daysUntil(x.date) >= 0 && daysUntil(x.date) <= 7).sort((a, b) => a.date - b.date).slice(0, 2)) out.push({ id: `cd-${c.id}`, tone: daysUntil(c.date) <= 2 ? 'warn' : 'info', text: `${c.title} is ${inDays(daysUntil(c.date))}` });
+    const habitsLeft = this.store.get('habits').filter((h) => !doneToday(h));
+    if (habitsLeft.length && new Date().getHours() >= 17) out.push({ id: 'habits', tone: 'info', text: habitsLeft.length === 1 ? `Habit left today: ${habitsLeft[0].name}` : `${habitsLeft.length} habits left today` });
+    const fromRecordings = this.recordings.filter((r) => now - r.at < 14 * 864e5).reduce((n, r) => n + r.actions.filter((a) => !a.done).length, 0);
+    if (fromRecordings) out.push({ id: 'hark', tone: 'info', text: `${fromRecordings} open action item${fromRecordings === 1 ? '' : 's'} from your recordings` });
     if (this.weather?.days[0] && this.weather.days[0].rain >= 70) out.push({ id: 'rain', tone: 'info', text: `Rain likely today (${this.weather.days[0].rain}%)` });
     for (const [k, v] of Object.entries(this.integrations)) if (v.state === 'error') out.push({ id: `int-${k}`, tone: 'warn', text: `${k[0].toUpperCase() + k.slice(1)}: ${v.detail ?? 'not responding'}`, action: { view: 'settings' } });
     if (!s.place) out.push({ id: 'place', tone: 'info', text: 'Tell me your town for local weather', action: { view: 'settings' } });
-    return out.slice(0, 6);
+    return out.slice(0, 7);
   }
 
   snapshot(lan: string[] = []): Snapshot {
     return {
       settings: this.settings, tasks: this.store.get('tasks'), notes: this.store.get('notes'), money: this.store.get('money'),
-      memories: this.store.get('memories').map(({ v: _v, ...m }) => m), timers: this.timers, chat: this.store.get('chat').slice(-60),
+      memories: this.store.get('memories').map(({ v: _v, ...m }) => m), timers: this.timers,
+      focus: this.recentFocus(), focusNow: this.focusNow, habits: this.store.get('habits'), countdowns: this.store.get('countdowns'), routines: this.store.get('routines'), recordings: this.recordingList(), chat: this.store.get('chat').slice(-60),
       events: this.events, mail: this.mail, unread: this.unread, music: this.music, weather: this.weather, vitals: this.vitals, home: this.home,
       integrations: this.integrations, models: this.models.list(this.ramGb), downloads: this.models.downloads(), status: { ...this.status },
       needs: this.needs(), mac: this.o.mac.real, version: this.o.version, links: { lan, token: this.store.get('meta').token, port: this.o.port },
@@ -436,6 +571,7 @@ export class Brain extends EventEmitter {
     if (patch.useAppleMail !== undefined) void this.refreshMail();
     if (patch.musicApp !== undefined) void this.refreshMusic();
     if (patch.homeShortcuts !== undefined) void this.refreshHome();
+    if (patch.useHark !== undefined) this.refreshHark();
     if (patch.asrModel !== undefined && patch.asrModel !== before.asrModel) void this.ensureAsr().catch(() => undefined);
     if (patch.llmModel !== undefined && patch.llmModel !== before.llmModel) {
       this.llmLoaded = '';
@@ -674,6 +810,7 @@ export class Brain extends EventEmitter {
     const L: string[] = [`Now: ${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.`];
     L.push(`You are talking to: ${s.userName || 'the user'}${s.place ? `, who lives in ${s.place}` : ''}.`);
     if (this.weather) L.push(`Weather: ${weatherSentence(this.weather)}.`);
+    else L.push('Weather: not available right now (say so if asked; never guess it).');
     const evs = this.events.filter((e) => e.end > now.getTime()).slice(0, 6);
     L.push(evs.length ? `Calendar: ${evs.map((e) => `${e.title} (${describeWhen(e.start)})`).join('; ')}.` : 'Calendar: nothing coming up.');
     const open = this.store.get('tasks').filter((t) => !t.done).slice(0, 10);
@@ -685,6 +822,18 @@ export class Brain extends EventEmitter {
     if (money.length) L.push(`Regular money: ${money.map((m) => `${m.name} ${s.currency}${m.amount}/${m.every} (${m.kind})`).join('; ')}.`);
     const notes = this.store.get('notes').slice(0, 4);
     if (notes.length) L.push(`Recent notes: ${notes.map((n) => `“${n.text.slice(0, 80)}”`).join('; ')}.`);
+    const fs = focusStats(this.store.get('focus'));
+    if (fs.week || this.focusNow) L.push(`Focused work: ${fs.today} minutes today (daily goal ${s.focusGoal}), ${fs.week} minutes over the last 7 days${fs.bySubject.length ? ` (${fs.bySubject.slice(0, 4).map(([k, v]) => `${k} ${v} min`).join(', ')})` : ''}, ${fs.streak}-day streak.${this.focusNow ? ` A focus session${this.focusNow.subject ? ` on ${this.focusNow.subject}` : ''} is running with ${Math.max(1, Math.ceil((this.focusNow.endsAt - now.getTime()) / 6e4))} minutes left.` : ''}`);
+    const habits = this.store.get('habits');
+    if (habits.length) L.push(`Daily habits: ${habits.map((h) => `${h.name} (${doneToday(h) ? 'done today' : 'not done yet today'}, ${streak(h.days)}-day streak)`).join('; ')}.`);
+    const cds = this.store.get('countdowns').filter((c) => daysUntil(c.date) >= 0).sort((a, b) => a.date - b.date).slice(0, 6);
+    if (cds.length) L.push(`Countdowns: ${cds.map((c) => `${c.title} ${inDays(daysUntil(c.date))} (${new Date(c.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long' })})`).join('; ')}.`);
+    if (this.aboutHark(query)) L.push(harkContext(this.harkDir, this.recordings, query));
+    if (/\b(clipboard|copied|pasted)\b/i.test(query)) {
+      // The clipboard is only ever read when the user brings it up.
+      const clip = (await this.o.mac.clipboard().catch(() => '')).trim();
+      L.push(clip ? `Clipboard (text ${s.userName || 'the user'} copied): «${clip.slice(0, 3000)}»` : 'Clipboard: empty, or not text.');
+    }
     const mems = await this.recall(query);
     if (mems.length) L.push(`What you remember about ${s.userName || 'the user'}: ${mems.map((m) => m.text).join(' ')}`);
     return L.join('\n');
@@ -698,7 +847,7 @@ export class Brain extends EventEmitter {
 
 Your replies are spoken aloud, so write the way a person talks: one to three short sentences, plain words, no lists, no markdown, no emoji. Give the answer first. Never read out raw data such as URLs or IDs.
 
-Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. Act only on the newest message: everything earlier in the conversation has already been dealt with. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
+Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music, focus time, habits, countdowns, sometimes their recorded conversations or clipboard, and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. Act only on the newest message: everything earlier in the conversation has already been dealt with. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
   }
 
   /** Instant answers for the simplest commands: no need to wake the language model. */
@@ -711,6 +860,76 @@ Each request comes with a <context> block. It is your live view of their world: 
       await tool.run(args);
       return { name, label: tool.label(args), ok: true };
     };
+    const c = t.replace(/^(please |can you |could you |will you |would you )+/, '').replace(/ please$/, '').trim();
+    const did = (name: string, label: string): ToolUse => ({ name, label, ok: true });
+
+    // ---- focus sessions
+    if (isFocusStop(c)) return this.focusNow ? { reply: this.endFocus(), tool: did('focus', 'Focus session ended') } : { reply: 'No focus session is running.' };
+    const focus = parseFocus(c);
+    if (focus) {
+      this.startFocus(focus.minutes, focus.subject);
+      return { reply: `${spokenMinutes(focus.minutes)}${focus.subject ? ` on ${focus.subject}` : ''}, starting now. I'll tell you when time is up.`, tool: did('focus', `Focus: ${focus.minutes} min${focus.subject ? ` · ${focus.subject}` : ''}`) };
+    }
+    if (/^how (much|long) have i (focused|studied|worked|revised)( for)?( today| this week| so far)*$|^(focus|study) (stats|time|summary)$/.test(c)) {
+      const st = focusStats(this.store.get('focus'));
+      if (!st.week) return { reply: 'Nothing logged yet. Say "start a focus session" and I will time it.' };
+      return { reply: `${st.today ? spokenMinutes(st.today) : 'Nothing'} today, and ${spokenMinutes(st.week)} over the last seven days${st.bySubject[0] && st.bySubject[0][0] !== 'General' ? `, mostly on ${st.bySubject[0][0]}` : ''}.${st.streak > 1 ? ` That's ${st.streak} days in a row.` : ''}` };
+    }
+
+    // ---- habits
+    const habits = this.store.get('habits');
+    const newHabit = c.match(/^(?:add|create|start|track|make) (?:a |an )?(?:new )?(?:daily )?habit(?: called| named| of| for| to)? (.+)$/);
+    if (newHabit) {
+      const name = tidy(newHabit[1]);
+      if (matchHabit(habits, name)?.name.toLowerCase() === name.toLowerCase()) return { reply: `${name} is already one of your habits.` };
+      habits.push({ id: uid(), name, days: [], at: Date.now() });
+      this.store.touch('habits');
+      this.patch({ habits, needs: this.needs() });
+      return { reply: `${name} is now a daily habit. Tell me when you've done it.`, tool: did('habit', `New habit: ${name}`) };
+    }
+    if (/^(how are my habits( doing| going)?|habits|my habits|what habits (do i have|are left)( today)?|which habits are left( today)?|habit (check|status))$/.test(c)) return { reply: this.habitsText() };
+    const ticked = c.match(/^(?:i(?:'ve| have)? (?:just )?(?:did|done|finished|completed)|mark|tick off|tick|log|check off) (?:my |the )?(.+?)(?: as done| as complete| done| off| complete)?(?: for)?(?: today)?$/);
+    const habit = ticked ? matchHabit(habits, ticked[1]) : undefined;
+    if (habit) {
+      if (doneToday(habit)) return { reply: `${habit.name} was already ticked off today.` };
+      this.setHabit(habit, true);
+      const n = streak(habit.days);
+      return { reply: `${habit.name} done.${n > 1 ? ` That's ${n} days in a row.` : ''}`, tool: did('habit', `Habit done: ${habit.name}`) };
+    }
+
+    // ---- countdowns
+    const cds = this.store.get('countdowns');
+    const newCd = c.match(/^(?:add |start |set |create |make )?(?:a |an )?count ?down (?:to|for|until|till) (?:my |the )?(.+?) (?:on|is on|which is on|at) (.+)$/);
+    const cdDate = newCd ? parseWhen(newCd[2]) : null;
+    if (newCd && cdDate) {
+      const title = tidy(newCd[1]);
+      this.store.set('countdowns', [...cds.filter((x) => x.title.toLowerCase() !== title.toLowerCase()), { id: uid(), title, date: cdDate }]);
+      this.patch({ countdowns: this.store.get('countdowns'), needs: this.needs() });
+      return { reply: `${title} is ${inDays(daysUntil(cdDate))}. I'll keep count.`, tool: did('countdown', `Counting down to ${title}`) };
+    }
+    const until = c.match(/^how (?:long|many days|many sleeps|many weeks) (?:is it |are there |do i have |have i got )?(?:left )?(?:until|till|to|before) (?:my |the )?(.+)$/);
+    const cd = until ? matchCountdown(cds, until[1]) : undefined;
+    if (cd) return { reply: `${cd.title} is ${daysUntil(cd.date) > 1 ? `${daysUntil(cd.date)} days away` : inDays(daysUntil(cd.date))}, on ${new Date(cd.date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}.` };
+    const dropCd = c.match(/^(?:remove|delete|cancel|stop) (?:the |my )?count ?down (?:to|for|until|till) (?:my |the )?(.+)$/);
+    const gone = dropCd ? matchCountdown(cds, dropCd[1]) : undefined;
+    if (gone) {
+      this.store.set('countdowns', cds.filter((x) => x.id !== gone.id));
+      this.patch({ countdowns: this.store.get('countdowns'), needs: this.needs() });
+      return { reply: `Stopped counting down to ${gone.title}.`, tool: did('countdown', `Removed ${gone.title}`) };
+    }
+
+    // ---- the day, top and tail
+    if (/^(evening review|daily review|review (my|the) day|how did (today|my day) go|end of day( review)?|wrap up( my| the)? day|how was my day)$/.test(c)) return { reply: this.reviewText() };
+    if (/^(briefing|brief me|morning briefing|daily briefing|(give me|play) (my|the) (morning |daily )?briefing|whats on today)$/.test(c.replace(/'/g, ''))) return { reply: this.briefingText() };
+
+    // ---- clipboard
+    if (/^copy (that|this|it|your (answer|reply|response)|what you (just )?said)( to (my |the )?clipboard)?$/.test(c)) {
+      const last = [...this.store.get('chat')].reverse().find((m) => m.role === 'assistant');
+      if (!last) return { reply: 'There is nothing to copy yet.' };
+      await this.o.mac.setClipboard(last.text);
+      return { reply: 'Copied.', tool: did('clipboard', 'Copied to clipboard') };
+    }
+
     if (/^(what('?s| is) the time|what time is it|time)( now| please)?$/.test(t)) return { reply: `It's ${new Date().toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true })}.` };
     if (/^(what('?s| is) (the|today'?s) date|what day is it)( today)?$/.test(t)) return { reply: `It's ${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}.` };
     const timer = t.match(/^(?:set|start) (?:a |an )?(?:(.+?) )?timer for (\d+(?:\.\d+)?|a|an|one|two|three|four|five|ten|fifteen|twenty|thirty) (second|minute|hour)s?$/) ?? t.match(/^(?:set |start )?(?:a |an )?(\d+(?:\.\d+)?|one|two|three|four|five|ten|fifteen|twenty|thirty) (second|minute|hour)s? timer()$/);
@@ -841,7 +1060,8 @@ Each request comes with a <context> block. It is your live view of their world: 
     const uses: ToolUse[] = [];
     try {
       // "Turn the volume down and open Safari" is two requests: handle each on its own, so neither is dropped.
-      for (const part of splitCommands(text)) {
+      const routine = this.matchRoutine(text);
+      for (const part of routine ? routine.steps : splitCommands(text)) {
         if (this.activeTurn !== turn) break;
         const lead = reply ? ' ' : '';
         const piece = await this.answer(turn, part, history, uses, speak, lead);
@@ -871,13 +1091,14 @@ Each request comes with a <context> block. It is your live view of their world: 
     if (fast) {
       if (fast.tool) (uses.push(fast.tool), this.push({ type: 'say', turn, tool: fast.tool }));
       this.push({ type: 'say', turn, delta: lead + fast.reply, state: 'speaking' });
-      if (speak) void this.speakOut(turn, fast.reply);
+      // Long replies (a briefing, a review) are voiced a sentence at a time, so speech starts at once.
+      if (speak) for (const sentence of takeSentences(fast.reply, true).sentences) void this.speakOut(turn, sentence);
       return fast.reply;
     }
     await this.ensureLlm();
     // Only hand over the web-search tool when the question is about the outside world. Small models
     // otherwise reach for it on personal questions that the context already answers.
-    const outward = /\b(search|look up|google|find out|news|latest|headline|who (is|was|were|won|invented|wrote)|what (is|are|was|were) (the|a|an)\b|when (is|was|did|does)|where (is|are|was)|how (many|much|far|old|tall|long|do|does|did)|price of|score|define|meaning of|capital of)\b/i.test(text) && !/\b(my|mine|me|i|i'm|i've|we|our)\b/i.test(text);
+    const outward = /\b(search|look up|google|find out|news|latest|headline|who (is|was|were|won|invented|wrote)|what (is|are|was|were) (the|a|an)\b|when (is|was|did|does)|where (is|are|was)|how (many|much|far|old|tall|long|do|does|did)|price of|score|define|meaning of|capital of)\b/i.test(text) && !/\b(my|mine|me|i|i'm|i've|we|our)\b/i.test(text) && !this.aboutHark(text) && !/\b(clipboard|copied|pasted)\b/i.test(text);
     // Questions and chat get no action tools at all, so answering can never have side effects;
     // only a request to do something unlocks them.
     const acting = wantsAction(text);
@@ -969,6 +1190,11 @@ Each request comes with a <context> block. It is your live view of their world: 
     if (this.unread) P.push(`You have ${this.unread} unread email${this.unread === 1 ? '' : 's'}${this.mail.length ? `, including one from ${this.mail[0].from}` : ''}.`);
     const bill = this.needs().find((n) => n.id === 'bill');
     if (bill) P.push(`${bill.text}.`);
+    for (const c of this.store.get('countdowns').filter((x) => daysUntil(x.date) >= 0 && daysUntil(x.date) <= 14).sort((a, b) => a.date - b.date).slice(0, 2)) P.push(`${c.title} is ${inDays(daysUntil(c.date))}.`);
+    const habits = this.store.get('habits');
+    const alive = habits.filter((x) => streak(x.days) >= 2 && !doneToday(x));
+    if (alive.length) P.push(`Keep ${alive.length === 1 ? `your ${alive[0].name.toLowerCase()} streak` : `${alive.length} habit streaks`} going today.`);
+    else if (habits.length) P.push(`${habits.length} habit${habits.length === 1 ? '' : 's'} to tick off today.`);
     P.push(['That is everything for now.', "That's the lot.", 'I will be here if you need me.'][now.getDate() % 3]);
     void s;
     return P.join(' ');
@@ -992,6 +1218,11 @@ Each request comes with a <context> block. It is your live view of their world: 
   }
 
   // ------------------------------------------------------------------ direct actions from the interface
+
+  /** Bring Jarvis forward and start listening (the global hotkey and the menu-bar icon call this). */
+  summon(): void {
+    this.push({ type: 'summon' });
+  }
 
   readonly actions: Record<string, (p: any) => unknown> = {
     saveSettings: (p: Partial<Settings>) => this.patchSettings(p),
@@ -1045,6 +1276,43 @@ Each request comes with a <context> block. It is your live view of their world: 
     refresh: () => Promise.all([this.refreshWeather(), this.refreshMail(), this.refreshCalendar(), this.refreshMusic(), this.refreshHome()]).then(() => true),
     downloadModel: (p: { id: string }) => void this.models.download(p.id),
     cancelDownload: (p: { id: string }) => this.models.cancel(p.id),
+    startFocus: (p: { minutes: number; subject?: string }) => void this.startFocus(p.minutes, p.subject ?? ''),
+    stopFocus: () => this.endFocus(),
+    addHabit: (p: { name: string }) => {
+      const name = tidy(String(p.name ?? ''));
+      if (!name || this.store.get('habits').some((h) => h.name.toLowerCase() === name.toLowerCase())) return;
+      this.store.get('habits').push({ id: uid(), name, days: [], at: Date.now() });
+      this.store.touch('habits');
+      this.patch({ habits: this.store.get('habits'), needs: this.needs() });
+    },
+    toggleHabit: (p: { id: string }) => {
+      const h = this.store.get('habits').find((x) => x.id === p.id);
+      if (h) this.setHabit(h, !doneToday(h));
+    },
+    deleteHabit: (p: { id: string }) => (this.store.set('habits', this.store.get('habits').filter((h) => h.id !== p.id)), this.patch({ habits: this.store.get('habits'), needs: this.needs() })),
+    addCountdown: (p: { title: string; when: string }) => {
+      const date = parseWhen(String(p.when));
+      const title = tidy(String(p.title ?? ''));
+      if (!date || !title) throw new Error('I could not understand that date. Try “12 January” or “2027-01-12”.');
+      this.store.get('countdowns').push({ id: uid(), title, date });
+      this.store.touch('countdowns');
+      this.patch({ countdowns: this.store.get('countdowns'), needs: this.needs() });
+    },
+    deleteCountdown: (p: { id: string }) => (this.store.set('countdowns', this.store.get('countdowns').filter((c) => c.id !== p.id)), this.patch({ countdowns: this.store.get('countdowns'), needs: this.needs() })),
+    saveRoutine: (p: { id?: string; name: string; steps: string[] }) => {
+      const name = String(p.name ?? '').trim();
+      const steps = (p.steps ?? []).map((x) => String(x).trim()).filter(Boolean).slice(0, 8);
+      if (!name) return;
+      const list = this.store.get('routines');
+      const cur = list.find((r) => r.id === p.id);
+      if (cur) (cur.name = name), (cur.steps = steps);
+      else list.push({ id: uid(), name, steps });
+      this.store.touch('routines');
+      this.patch({ routines: list });
+    },
+    deleteRoutine: (p: { id: string }) => (this.store.set('routines', this.store.get('routines').filter((r) => r.id !== p.id)), this.patch({ routines: this.store.get('routines') })),
+    runRoutine: (p: { name: string; device?: string }) => void this.say(p.name, p),
+    review: () => void this.say('Evening review'),
     exportData: () => this.store.exportAll(),
     importData: (p: { json: string }) => {
       this.store.importAll(p.json);

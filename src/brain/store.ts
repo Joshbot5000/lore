@@ -2,11 +2,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_SETTINGS } from '../shared/types';
-import type { ChatMsg, CalEvent, Memory, Money, Note, Settings, Task } from '../shared/types';
+import type { ChatMsg, CalEvent, Countdown, Focus, Habit, Memory, Money, Note, Routine, Settings, Task } from '../shared/types';
 
-type Shape = { settings: Settings; tasks: Task[]; notes: Note[]; money: Money[]; memories: Memory[]; chat: ChatMsg[]; events: CalEvent[]; meta: { token: string; lastBriefing?: string } };
+type Shape = { settings: Settings; tasks: Task[]; notes: Note[]; money: Money[]; memories: Memory[]; chat: ChatMsg[]; events: CalEvent[]; focus: Focus[]; habits: Habit[]; countdowns: Countdown[]; routines: Routine[]; meta: { token: string; lastBriefing?: string } };
 
-const FILES: (keyof Shape)[] = ['settings', 'tasks', 'notes', 'money', 'memories', 'chat', 'events', 'meta'];
+const FILES: (keyof Shape)[] = ['settings', 'tasks', 'notes', 'money', 'memories', 'chat', 'events', 'focus', 'habits', 'countdowns', 'routines', 'meta'];
 
 export class Store {
   private data: Shape;
@@ -25,7 +25,12 @@ export class Store {
     this.data = {
       settings: { ...DEFAULT_SETTINGS, ...read<Partial<Settings>>('settings', {}) },
       tasks: read('tasks', []), notes: read('notes', []), money: read('money', []), memories: read('memories', []),
-      chat: read('chat', []), events: read('events', []),
+      chat: read('chat', []), events: read('events', []), focus: read('focus', []), habits: read('habits', []), countdowns: read('countdowns', []),
+      // Two starter routines; edit or delete them in Settings.
+      routines: read('routines', [
+        { id: 'r-morning', name: 'Good morning', steps: ['briefing'] },
+        { id: 'r-night', name: 'Good night', steps: ['pause the music', 'evening review'] },
+      ]),
       meta: read('meta', { token: '' }),
     };
     if (!this.data.meta.token) {

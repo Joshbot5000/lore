@@ -3,7 +3,7 @@
  * through AppleScript / built-in command-line tools, so there is nothing to sign in to. A fake
  * bridge with believable data stands in on other platforms and in tests.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import os from 'node:os';
 import type { CalEvent, Mail, NowPlaying } from '../shared/types';
 
@@ -20,6 +20,9 @@ export type MacBridge = {
   setVolume(percent: number): Promise<void>;
   battery(): Promise<{ percent: number; charging: boolean } | null>;
   system(action: 'lock' | 'sleep-display' | 'dark-mode' | 'mute' | 'unmute'): Promise<void>;
+  /** The text currently on the clipboard (only read when the user asks about it). */
+  clipboard(): Promise<string>;
+  setClipboard(text: string): Promise<void>;
 };
 
 const run = (cmd: string, args: string[], timeout = 15000): Promise<string> =>
@@ -137,6 +140,15 @@ end tell`,
     else if (action === 'dark-mode') await osa('tell application "System Events" to tell appearance preferences to set dark mode to not dark mode');
     else await osa(`set volume output muted ${action === 'mute'}`);
   },
+
+  clipboard: () => run('pbpaste', []),
+  setClipboard: (text) =>
+    new Promise((resolve, reject) => {
+      const p = spawn('pbcopy');
+      p.on('error', reject);
+      p.on('close', (code) => (code === 0 ? resolve() : reject(new Error('The clipboard could not be written.'))));
+      p.stdin.end(text);
+    }),
 };
 
 /** Stand-in used off the Mac and in tests: behaves like a small, stateful Mac. */
@@ -144,6 +156,7 @@ export function fakeMac(): MacBridge {
   const now = () => Date.now();
   const tracks = [['Midnight City', 'M83', "Hurry Up, We're Dreaming"], ['Intro', 'The xx', 'xx'], ['Time', 'Hans Zimmer', 'Inception']];
   let i = 0, state: NowPlaying['state'] = 'paused', volume = 55, started = now();
+  let clip = process.env.JARVIS_FAKE_CLIPBOARD ?? '';
   const day = (d: number, h: number, m = 0) => {
     const t = new Date();
     t.setDate(t.getDate() + d);
@@ -182,6 +195,8 @@ export function fakeMac(): MacBridge {
     setVolume: async (p) => void (volume = p),
     battery: async () => ({ percent: 82, charging: false }),
     system: async () => undefined,
+    clipboard: async () => clip,
+    setClipboard: async (t) => void (clip = t),
   };
 }
 

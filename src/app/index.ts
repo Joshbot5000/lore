@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, net, powerSaveBlocker, session, shell, systemPreferences, utilityProcess, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, Notification, Tray, globalShortcut, nativeImage, net, powerSaveBlocker, session, shell, systemPreferences, utilityProcess, ipcMain } from 'electron';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -77,8 +77,64 @@ function createWindow(): void {
     if (/^https?:/.test(u)) void shell.openExternal(u);
     return { action: 'deny' };
   });
-  win.on('closed', () => (win = null));
+  win.on('closed', () => ((win = null), (loaded = false)));
+  win.webContents.on('did-finish-load', () => (loaded = true));
   void win.loadURL(url);
+}
+
+let tray: Tray | null = null;
+let loaded = false;
+
+/** Bring the window forward (opening it if it was closed), then start listening. */
+function summon(brain: Brain): void {
+  if (!win) {
+    loaded = false;
+    createWindow();
+  } else {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+  if (loaded) brain.summon();
+  else win?.webContents.once('did-finish-load', () => setTimeout(() => brain.summon(), 900));
+}
+
+let hotkey = '';
+function setHotkey(brain: Brain, accel: string): void {
+  if (accel === hotkey) return;
+  if (hotkey) globalShortcut.unregister(hotkey);
+  hotkey = '';
+  if (!accel) return;
+  try {
+    if (globalShortcut.register(accel, () => summon(brain))) hotkey = accel;
+  } catch {
+    /* not a valid key combination: leave the shortcut off */
+  }
+}
+
+/** A menu-bar icon, so Jarvis is one click away even with the window closed. */
+function makeTray(brain: Brain): void {
+  try {
+    const icon = nativeImage.createFromPath(path.join(app.getAppPath(), 'resources', 'icon.png')).resize({ width: 18, height: 18 });
+    tray = new Tray(icon);
+    tray.setToolTip('Jarvis');
+    const say = (text: string) => () => void brain.say(text, { device: 'mac' });
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'Talk to Jarvis', click: () => summon(brain) },
+        { label: 'Open dashboard', click: () => (win ? (win.show(), win.focus()) : createWindow()) },
+        { type: 'separator' },
+        { label: 'Briefing', click: say('Briefing') },
+        { label: 'Evening review', click: say('Evening review') },
+        { label: 'Focus for 25 minutes', click: say('Start a focus session for 25 minutes') },
+        { label: 'Focus for 50 minutes', click: say('Start a focus session for 50 minutes') },
+        { type: 'separator' },
+        { label: 'Quit Jarvis', click: () => app.quit() },
+      ]),
+    );
+  } catch {
+    /* no menu bar on this system */
+  }
 }
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -112,6 +168,12 @@ else {
       ]),
     );
     createWindow();
+    makeTray(brain);
+    setHotkey(brain, brain.settings.hotkey);
+    brain.on('push', (p: { type: string; data?: { settings?: { hotkey: string } } }) => {
+      if (p.type === 'patch' && p.data?.settings) setHotkey(brain, p.data.settings.hotkey);
+    });
+    app.on('will-quit', () => globalShortcut.unregisterAll());
     app.on('activate', () => !BrowserWindow.getAllWindows().length && createWindow());
     app.on('before-quit', () => brain.stop());
   });

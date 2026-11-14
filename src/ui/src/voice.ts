@@ -99,6 +99,13 @@ export function hush(): void {
 
 export function initVoice(): void {
   onPush((p) => {
+    // The summon shortcut on the Mac: first press starts listening, second press sends.
+    if (p.type === 'summon') {
+      if (!(window as { jarvisDesktop?: unknown }).jarvisDesktop) return;
+      if (get().mode === 'listening') talkEnd();
+      else void talkStart();
+      return;
+    }
     if (p.type === 'audio') {
       if (p.turn !== lastTurn && !p.turn.startsWith('n')) {
         // A new reply replaces anything still being said.

@@ -91,3 +91,108 @@ describe('wantsAction', () => {
     for (const t of ['Do I have any unread emails?', "What's on today?", 'How are you?', 'Who wrote Pride and Prejudice?', 'Good morning', 'What should I focus on today?', 'I think we should order pizza']) expect(wantsAction(t), t).toBe(false);
   });
 });
+
+import { dayKey, daysUntil, focusStats, inDays, isFocusStop, matchCountdown, matchHabit, parseFocus, spokenMinutes, streak } from '../src/brain/life';
+import { harkContext, pickRecordings, readHark } from '../src/brain/hark';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+describe('focus, habits and countdowns', () => {
+  it('understands how people ask for a focus session', () => {
+    expect(parseFocus('start a 45 minute focus session on contract law')).toEqual({ minutes: 45, subject: 'Contract law' });
+    expect(parseFocus('focus for 25 minutes')).toEqual({ minutes: 25, subject: '' });
+    expect(parseFocus('study tort for an hour')).toEqual({ minutes: 60, subject: 'Tort' });
+    expect(parseFocus("let's focus")).toEqual({ minutes: 25, subject: '' });
+    expect(parseFocus('start a focus session')).toEqual({ minutes: 25, subject: '' });
+    expect(parseFocus('start a pomodoro')).toEqual({ minutes: 25, subject: '' });
+    expect(parseFocus('focus on my essay for an hour and a half')).toEqual({ minutes: 90, subject: 'Essay' });
+    expect(parseFocus('start a ninety minute deep work block on the dissertation')).toEqual({ minutes: 90, subject: 'Dissertation' });
+    expect(parseFocus('revise equity and trusts for 40 minutes')).toEqual({ minutes: 40, subject: 'Equity and trusts' });
+  });
+  it('leaves other requests alone', () => {
+    for (const t of ['start a timer for 5 minutes', 'how much have I focused today', 'play some focus music', 'what time is it', 'open my study notes', 'start the washing machine', 'I need to study for my exam tomorrow']) expect(parseFocus(t)).toBeNull();
+    expect(isFocusStop('stop the focus session')).toBe(true);
+    expect(isFocusStop("I'm done studying")).toBe(true);
+    expect(isFocusStop('stop the music')).toBe(false);
+  });
+  it('counts streaks, keeping one alive until the day is over', () => {
+    expect(streak(['2026-11-12', '2026-11-13', '2026-11-14'], '2026-11-14')).toBe(3);
+    expect(streak(['2026-11-12', '2026-11-13'], '2026-11-14')).toBe(2);
+    expect(streak(['2026-11-10', '2026-11-12'], '2026-11-14')).toBe(0);
+    expect(streak(['2026-10-31', '2026-11-01'], '2026-11-01')).toBe(2);
+  });
+  it('adds up focus time', () => {
+    const now = new Date(2026, 10, 14, 20).getTime();
+    const at = (d: number, h: number) => new Date(2026, 10, d, h).getTime();
+    const st = focusStats([{ id: 'a', subject: 'Tort', start: at(14, 9), minutes: 50 }, { id: 'b', subject: 'Contract', start: at(14, 14), minutes: 25 }, { id: 'c', subject: 'Tort', start: at(13, 10), minutes: 45 }, { id: 'd', subject: '', start: at(1, 10), minutes: 99 }], now);
+    expect(st.today).toBe(75);
+    expect(st.week).toBe(120);
+    expect(st.streak).toBe(2);
+    expect(st.bySubject).toEqual([['Tort', 95], ['Contract', 25]]);
+    expect(st.last7).toEqual([0, 0, 0, 0, 0, 45, 75]);
+    expect(dayKey(at(14, 23))).toBe('2026-11-14');
+    expect(spokenMinutes(95)).toBe('1 hour 35 minutes');
+    expect(spokenMinutes(1)).toBe('1 minute');
+  });
+  it('finds the habit or countdown someone means', () => {
+    const habits = [{ id: '1', name: 'Workout', days: [], at: 0 }, { id: '2', name: 'Read 20 pages', days: [], at: 0 }, { id: '3', name: 'Meditate', days: [], at: 0 }];
+    expect(matchHabit(habits, 'my workout')?.id).toBe('1');
+    expect(matchHabit(habits, 'reading')?.id).toBe('2');
+    expect(matchHabit(habits, 'meditation')?.id).toBe('3');
+    expect(matchHabit(habits, 'the tort essay')).toBeUndefined();
+    const cds = [{ id: 'x', title: 'Tort exam', date: 0 }, { id: 'y', title: 'Holiday in Lisbon', date: 0 }];
+    expect(matchCountdown(cds, 'my tort exam')?.id).toBe('x');
+    expect(matchCountdown(cds, 'lisbon')?.id).toBe('y');
+    expect(matchCountdown(cds, 'christmas')).toBeUndefined();
+    const now = new Date(2026, 10, 14, 23, 30).getTime();
+    expect(daysUntil(new Date(2026, 10, 15, 0, 5).getTime(), now)).toBe(1);
+    expect(inDays(0)).toBe('today');
+    expect(inDays(12)).toBe('in 12 days');
+    expect(inDays(21)).toBe('in 3 weeks');
+  });
+});
+
+describe('Hark link', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jv-hark-'));
+  const put = (id: string, meeting: object, paras: object[]) => {
+    fs.mkdirSync(path.join(dir, 'conversations', id), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'conversations', id, 'meeting.json'), JSON.stringify(meeting));
+    fs.writeFileSync(path.join(dir, 'conversations', id, 'transcript.json'), JSON.stringify(paras));
+  };
+  put('a1', { title: 'Weekly product sync', status: 'ready', createdAt: Date.now() - 864e5, duration: 1260, speakers: [{ id: 'S1', name: 'Priya', named: true }, { id: 'S2', name: 'Speaker 2' }],
+    summary: { overview: 'The team set the launch date.', keyPoints: ['Launch moves to 3 March'], decisions: ['Ship without the press release'], actions: [{ text: 'Recruit 50 beta customers', owner: 'George', due: 'Friday', done: false }, { text: 'Book the venue', done: true }] } },
+    [{ sp: 'S1', text: 'I think the launch should move to the third of March.' }, { sp: 'S2', text: 'The password reset email is still slow.' }]);
+  put('b2', { title: 'Landlord call', status: 'ready', createdAt: Date.now() - 5 * 864e5, duration: 300, speakers: [], summary: { overview: 'Boiler repair agreed.', keyPoints: [], decisions: [], actions: [] } }, []);
+  put('c3', { title: 'Half done', status: 'processing', createdAt: Date.now() }, []);
+  fs.mkdirSync(path.join(dir, 'conversations', 'junk'));
+  it('reads finished conversations, newest first', () => {
+    const recs = readHark(dir)!;
+    expect(recs.map((r) => r.title)).toEqual(['Weekly product sync', 'Landlord call']);
+    expect(recs[0]).toMatchObject({ minutes: 21, speakers: ['Priya'] });
+    expect(readHark(path.join(dir, 'nope'))).toBeNull();
+  });
+  it('picks the recording a question is about and quotes it', () => {
+    const recs = readHark(dir)!;
+    expect(pickRecordings(recs, 'what did the landlord say about the boiler?')[0].title).toBe('Landlord call');
+    expect(pickRecordings(recs, 'what was decided in my last meeting?').map((r) => r.title)).toEqual(['Weekly product sync']);
+    const ctx = harkContext(dir, recs, 'when is the launch according to the product sync?');
+    expect(ctx).toContain('Launch moves to 3 March');
+    expect(ctx).toContain('George: Recruit 50 beta customers (due Friday)');
+    expect(ctx).not.toContain('Book the venue');
+    expect(ctx).toContain('Priya: “I think the launch should move to the third of March.”');
+    expect(ctx).toContain('Other recordings: “Landlord call”');
+  });
+});
+
+import { namesRecording } from '../src/brain/hark';
+describe('recognising a question about a recording', () => {
+  const recs = [{ title: 'Weekly product sync' }, { title: 'Landlord call' }, { title: 'Morning conversation, 14 Nov' }] as never;
+  it('needs the title, not just one common word', () => {
+    expect(namesRecording(recs, 'who is recruiting the beta customers from the product sync?')).toBe(true);
+    expect(namesRecording(recs, 'what did we agree in the landlord call')).toBe(true);
+    expect(namesRecording(recs, 'what is my weekly shop budget')).toBe(false);
+    expect(namesRecording(recs, 'good morning')).toBe(false);
+    expect(namesRecording(recs, 'call my landlord')).toBe(false);
+  });
+});

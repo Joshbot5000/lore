@@ -3,10 +3,11 @@ import { Brain, CalendarDays, LayoutGrid, Radio, Settings as Cog, Smartphone, Vo
 import { act, isPhone, set, token, useLink, useSnap } from './link';
 import { unlock } from './voice';
 import { ClockCard, CoreCard, HomeCard, InboxCard, MoneyCard, MusicCard, NotebookCard, TasksCard, UpcomingCard, VitalsCard, WeatherCard } from './cards';
+import { CountdownCard, FocusCard, HabitsCard } from './life';
 import { ACCENTS, LogPanel, MindPanel, Onboarding, PairPanel, SettingsPanel } from './panels';
 import type { Integrations } from '../../shared/types';
 
-const DOTS: [keyof Integrations, string][] = [['mail', 'MAIL'], ['calendar', 'CAL'], ['weather', 'WX'], ['home', 'HOME'], ['music', 'MUSIC']];
+const DOTS: [keyof Integrations, string][] = [['mail', 'MAIL'], ['calendar', 'CAL'], ['weather', 'WX'], ['home', 'HOME'], ['music', 'MUSIC'], ['hark', 'HARK']];
 
 function TopBar() {
   const integrations = useSnap((s) => s.integrations);
@@ -81,7 +82,9 @@ export function App() {
             <ClockCard /><WeatherCard /><UpcomingCard />
             <CoreCard compact={isPhone} />
             <InboxCard /><TasksCard />
-            <MusicCard /><HomeCard /><MoneyCard /><NotebookCard /><VitalsCard />
+            <MusicCard /><HomeCard /><MoneyCard />
+            <FocusCard /><HabitsCard /><CountdownCard />
+            <NotebookCard /><VitalsCard />
           </main>
           <Dock />
         </>

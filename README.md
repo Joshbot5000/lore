@@ -24,6 +24,14 @@ no subscription, no usage limits, and nothing you say is uploaded.
 | **Look things up** | Web search and Wikipedia when he needs a fact |
 | **What needs you** | A live shortlist: overdue tasks, the next meeting, unread mail, a bill due, rain on the way |
 | **Systems** | CPU, memory and battery gauges, and the state of his own mind, ears and voice |
+| **Focus sessions** | “Start a 45 minute focus session on contract law.” He times it, tells you when it's up and logs it: today, the last seven days, time per subject, and a daily streak against your goal |
+| **Habits** | “Add a habit called reading”, then “I did my reading”. Seven-day dots and streaks; a nudge in the evening for anything left |
+| **Countdowns** | “Count down to my tort exam on 12 January.” “How many days until my exam?” Close ones appear in the briefing and in What needs you |
+| **Routines** | One phrase runs several commands in order. “Good night” pauses the music and gives the evening review; make your own in Settings |
+| **Evening review** | “How did today go?”: tasks finished, focus time against your goal, habits done and left, and what tomorrow starts with |
+| **Your recordings** | If [Hark](https://github.com/Joshbot5000/pdf-reader/tree/claude/hopeful-brahmagupta-y0gpgx) is installed, ask “what was decided in my last meeting?” or “who is doing what from the product sync?”. Open action items from recordings show in What needs you |
+| **Clipboard** | Copy any text, then “summarise what I copied” or “explain what I copied”. “Copy that” puts his last answer on the clipboard. The clipboard is only read when you mention it |
+| **Summon anywhere** | Press Option+Space in any app to bring him up listening; press again to send. A menu-bar icon gives one-click briefing, review and focus sessions |
 | **Phone** | The same Jarvis as a home-screen app on your phone, sharing memory, tasks and conversation live |
 
 ## Install on your Mac

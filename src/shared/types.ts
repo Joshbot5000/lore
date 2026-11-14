@@ -4,6 +4,16 @@ export type Memory = { id: string; text: string; kind: 'profile' | 'preference' 
 export type Task = { id: string; title: string; due?: number; done: boolean; doneAt?: number; at: number; notified?: boolean; notes?: string };
 export type Note = { id: string; text: string; at: number };
 export type Money = { id: string; name: string; amount: number; every: 'month' | 'year' | 'week' | 'once'; kind: 'bill' | 'income'; day?: number; at: number };
+/** A finished stretch of focused work. */
+export type Focus = { id: string; subject: string; start: number; minutes: number };
+export type FocusNow = { id: string; subject: string; start: number; endsAt: number; total: number };
+/** A daily habit; `days` holds the local dates (YYYY-MM-DD) it was done. */
+export type Habit = { id: string; name: string; days: string[]; at: number };
+export type Countdown = { id: string; title: string; date: number };
+/** A named set of commands run in order: saying the name runs them all. */
+export type Routine = { id: string; name: string; steps: string[] };
+/** A conversation recorded in Hark (read-only). */
+export type Recording = { id: string; title: string; at: number; minutes: number; overview: string; open: number };
 export type Timer = { id: string; label: string; endsAt: number; total: number };
 export type ChatMsg = { id: string; role: 'user' | 'assistant'; text: string; at: number; tools?: ToolUse[]; device?: string };
 export type ToolUse = { name: string; label: string; ok: boolean };
@@ -20,7 +30,7 @@ export type Vitals = { cpu: number; mem: number; battery?: number; charging?: bo
 export type HomeAction = { id: string; name: string; icon?: string };
 
 export type IntegrationState = 'ok' | 'off' | 'error' | 'setup';
-export type Integrations = Record<'weather' | 'calendar' | 'mail' | 'music' | 'home' | 'system', { state: IntegrationState; detail?: string }>;
+export type Integrations = Record<'weather' | 'calendar' | 'mail' | 'music' | 'home' | 'system' | 'hark', { state: IntegrationState; detail?: string }>;
 
 export type Settings = {
   userName: string;
@@ -45,12 +55,18 @@ export type Settings = {
   currency: string;
   onboarded: boolean;
   briefingHour: number;
+  /** Minutes of focused work to aim for each day. */
+  focusGoal: number;
+  /** Key combination that summons Jarvis from anywhere on the Mac. Empty turns it off. */
+  hotkey: string;
+  /** Read conversations recorded in Hark, so Jarvis can answer questions about them. */
+  useHark: boolean;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
   userName: '', address: 'name', assistantName: 'Jarvis', place: '', units: 'c', voice: 'bm_george', speed: 1.05, speak: true, wake: false,
   accent: 'arc', asrModel: 'whisper-base', llmModel: 'qwen-4b', calendarUrls: [], useAppleCalendar: true, useAppleMail: true, musicApp: 'Spotify',
-  homeShortcuts: [], currency: '£', onboarded: false, briefingHour: 8,
+  homeShortcuts: [], currency: '£', onboarded: false, briefingHour: 8, focusGoal: 120, hotkey: 'Alt+Space', useHark: true,
 };
 
 export type ModelInfo = { id: string; kind: 'asr' | 'llm' | 'voice' | 'support'; name: string; blurb: string; bytes: number; installed: boolean; recommended?: boolean };
@@ -65,6 +81,12 @@ export type Snapshot = {
   money: Money[];
   memories: Omit<Memory, 'v'>[];
   timers: Timer[];
+  focus: Focus[];
+  focusNow: FocusNow | null;
+  habits: Habit[];
+  countdowns: Countdown[];
+  routines: Routine[];
+  recordings: Recording[];
   chat: ChatMsg[];
   events: CalEvent[];
   mail: Mail[];
@@ -90,7 +112,8 @@ export type Push =
   | { type: 'patch'; data: Partial<Snapshot> }
   | { type: 'say'; turn: string; delta?: string; done?: boolean; error?: string; heard?: string; tool?: ToolUse; state?: 'thinking' | 'speaking' | 'idle' }
   | { type: 'audio'; turn: string; seq: number; wav: string; text: string; last?: boolean }
-  | { type: 'notify'; title: string; body: string; speak?: string };
+  | { type: 'notify'; title: string; body: string; speak?: string }
+  | { type: 'summon' };
 
 export const VOICES: [string, string][] = [
   ['bm_george', 'George · British, measured'], ['bm_fable', 'Fable · British, warm'], ['bm_lewis', 'Lewis · British, deep'], ['bm_daniel', 'Daniel · British, bright'],

@@ -106,6 +106,15 @@ export function SettingsPanel() {
         </div>
       )}
 
+      <h3>Routines</h3>
+      <p className="lead">Say a routine's name and I run its steps in order. Each line is something you could say to me; “briefing” and “evening review” work too.</p>
+      <Routines />
+
+      <h3>Focus and summon</h3>
+      <Field label="Daily focus goal" hint="Minutes of focused work to aim for each day."><Text value={String(s.focusGoal)} onSave={(v) => save({ focusGoal: Math.max(0, Math.min(960, Math.round(+v) || 0)) })} /></Field>
+      <Field label="Summon shortcut" hint="Press this anywhere on your Mac to bring me up and start listening. Press again to send. Alt is the Option key. Leave empty to turn off."><Text value={s.hotkey} onSave={(v) => save({ hotkey: v.trim() })} placeholder="Alt+Space" /></Field>
+      <Field label="Recordings from Hark" hint={integrations.hark.state === 'ok' ? `Connected: ${integrations.hark.detail ?? ''}. Ask me what was said or decided.` : 'If Hark is installed on this Mac, I can answer questions about your recorded conversations.'}><Toggle on={s.useHark} onChange={(v) => save({ useHark: v })} /></Field>
+
       <h3>On-device AI</h3>
       <p className="lead">No account, no API key, no usage limits. Models download once and then work offline.</p>
       <span className="label dim">Mind</span>
@@ -124,6 +133,25 @@ export function SettingsPanel() {
         <button className="btn danger" onClick={() => confirm('Clear the whole conversation log?') && act('clearChat')}>Clear chat log</button>
       </div>
     </Drawer>
+  );
+}
+
+function Routines() {
+  const routines = useSnap((x) => x.routines);
+  return (
+    <>
+      {routines.map((r) => (
+        <div className="routine" key={r.id}>
+          <div className="routine-head">
+            <input defaultValue={r.name} placeholder="Name (what you say)" onBlur={(e) => e.target.value.trim() && e.target.value !== r.name && act('saveRoutine', { id: r.id, name: e.target.value, steps: r.steps })} />
+            <button className="ghost" title="Run now" onClick={() => (unlock(), set({ panel: null }), act('runRoutine', { name: r.name }))}><Play size={14} /></button>
+            <button className="ghost" title="Delete" onClick={() => confirm(`Delete the “${r.name}” routine?`) && act('deleteRoutine', { id: r.id })}><Trash2 size={14} /></button>
+          </div>
+          <textarea defaultValue={r.steps.join('\n')} placeholder={'One step per line, e.g.\npause the music\nset the volume to 20\nevening review'} onBlur={(e) => act('saveRoutine', { id: r.id, name: r.name, steps: e.target.value.split('\n') })} />
+        </div>
+      ))}
+      <button className="btn small" onClick={() => act('saveRoutine', { name: `Routine ${routines.length + 1}`, steps: [] })}><Plus size={13} /> New routine</button>
+    </>
   );
 }
 

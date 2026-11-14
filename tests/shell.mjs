@@ -23,6 +23,8 @@ try {
   await page.waitForFunction(() => !document.querySelector('.send.stop') && /Josh|Stockport/.test(document.querySelector('.said')?.textContent ?? ''), null, { timeout: 180000 });
   log('answer:', await page.locator('.said').innerText()); await page.screenshot({ path: `${out}/s06-answer.png` });
   log('status chips:', (await page.locator('.eng').allInnerTexts()).join(' | '));
+  log('summon shortcut registered:', await app.evaluate(({ globalShortcut }) => globalShortcut.isRegistered('Alt+Space')));
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('noop'));
   log('errors:', errors.length ? errors.slice(0, 5).join(' || ') : 'none');
 } catch (e) { await page.screenshot({ path: `${out}/SHELL-FAILED.png` }).catch(() => {}); console.log('SHELL FAILED', String(e.message).split('\n')[0], '|', errors.slice(0, 5).join(' || ')); }
 await app.close();

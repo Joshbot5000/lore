@@ -29,7 +29,10 @@ Wants it working by 12pm UK time on 14 Nov.
 - [x] README, unit tests
 - [ ] NOT yet run on a real Mac: AppleScript integrations, permission prompts, Metal. Live weather / web search
       could not be reached from the build container (network policy), only their parsers are tested.
-- [ ] Ideas not done: menu-bar icon, Home Assistant, IMAP mail, Hark library as a Jarvis knowledge source.
+- [x] Upgrade (14 Nov, afternoon): focus sessions, habits, countdowns, routines, evening review, Hark link
+      (src/brain/hark.ts reads Hark's library read-only), clipboard, summon hotkey + menu-bar icon.
+      Pure logic in src/brain/life.ts. Test: `node tests/life.mjs [--llm]` (starts its own brain; 25 checks).
+- [ ] Ideas not done: Home Assistant, IMAP mail.
 
 ## How to run the tests here
 JARVIS_FAKE_MAC=1 JARVIS_DATA_DIR=/tmp/jv-data JARVIS_MODELS_DIR=/home/user/hark/scratch/models node out/main/headless.js
