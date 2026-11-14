@@ -49,6 +49,14 @@ const str = (properties: Record<string, string>, required: string[] = Object.key
 
 const COMMAND = /^(?:please |then |also )?(open|launch|set|start|play|pause|resume|stop|skip|turn|remind|add|put|run|mute|unmute|lock|note|make a note|take a note|remember|track|schedule|book|close|switch|search|look up|tell me|what|who|when|where|how)\b/i;
 
+const ACTION = /^(open|launch|set|start|play|pause|resume|stop|skip|turn|remind|add|put|run|mute|unmute|lock|note|make|take|remember|forget|track|schedule|book|close|switch|mark|complete|finish|tick|delete|remove|cancel|create|save|write|dim|lower|raise|increase|decrease|change|show me|search|look up|google|find)\b/i;
+
+/** Is the user asking for something to be done (as opposed to asking a question or chatting)? */
+export function wantsAction(text: string): boolean {
+  const t = text.trim().replace(/^(hey |ok |okay )?jarvis[,.!]?\s*/i, '').replace(/^(please|can you|could you|would you|will you|i need you to|i want you to|i'd like you to|let's|go ahead and)\s+/i, '').replace(/^please\s+/i, '');
+  return ACTION.test(t) || /\b(i've|i have|i'm|i am|i) (just )?(finished|done|completed)\b/i.test(t) || /\bremind me\b/i.test(t);
+}
+
 /** Split "do X and do Y" into its two requests, but leave "bread and butter" alone. */
 export function splitCommands(text: string): string[] {
   const parts = text.split(/\s*(?:,\s*(?:and\s+)?(?:then\s+)?|\s+and\s+(?:then\s+)?|\s+then\s+|;\s*)(?=\S)/i);
@@ -690,7 +698,7 @@ export class Brain extends EventEmitter {
 
 Your replies are spoken aloud, so write the way a person talks: one to three short sentences, plain words, no lists, no markdown, no emoji. Give the answer first. Never read out raw data such as URLs or IDs.
 
-Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. If they ask for two things, call a tool for each one. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
+Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. Act only on the newest message: everything earlier in the conversation has already been dealt with. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
   }
 
   /** Instant answers for the simplest commands: no need to wake the language model. */
@@ -822,7 +830,8 @@ Each request comes with a <context> block. It is your live view of their world: 
     if (this.activeTurn && this.llm.running) void this.llm.call('abort', { streamId: this.activeTurn }).catch(() => undefined);
     this.activeTurn = turn;
     const chat = this.store.get('chat');
-    const history = chat.slice(-8).map((c) => ({ role: c.role, text: c.text }));
+    // Past actions are shown as finished, so an old request is never carried out a second time.
+    const history = chat.slice(-8).map((c) => ({ role: c.role, text: c.tools?.some((t) => t.ok) ? `${c.text} [Already completed: ${c.tools.filter((t) => t.ok).map((t) => t.label).join('; ')}]` : c.text }));
     const userMsg: ChatMsg = { id: uid(), role: 'user', text, at: Date.now(), device: opts.device };
     chat.push(userMsg);
     this.store.touch('chat');
@@ -866,7 +875,13 @@ Each request comes with a <context> block. It is your live view of their world: 
       return fast.reply;
     }
     await this.ensureLlm();
-    const tools = this.tools();
+    // Only hand over the web-search tool when the question is about the outside world. Small models
+    // otherwise reach for it on personal questions that the context already answers.
+    const outward = /\b(search|look up|google|find out|news|latest|headline|who (is|was|were|won|invented|wrote)|what (is|are|was|were) (the|a|an)\b|when (is|was|did|does)|where (is|are|was)|how (many|much|far|old|tall|long|do|does|did)|price of|score|define|meaning of|capital of)\b/i.test(text) && !/\b(my|mine|me|i|i'm|i've|we|our)\b/i.test(text);
+    // Questions and chat get no action tools at all, so answering can never have side effects;
+    // only a request to do something unlocks them.
+    const acting = wantsAction(text);
+    const tools = this.tools().filter((t) => (t.name === 'web_search' ? outward : acting));
     let reply = '';
     let pending = '';
     let first = true;
@@ -912,7 +927,7 @@ Each request comes with a <context> block. It is your live view of their world: 
         system: this.persona(),
         history,
         prompt: `<context>\n${await this.context(text)}\n</context>\n\n${text}`,
-        tools: tools.map(({ name, description, params }) => ({ name, description, params })),
+        ...(tools.length ? { tools: tools.map(({ name, description, params }) => ({ name, description, params })) } : {}),
         maxTokens: 500,
         temperature: 0.5,
       });

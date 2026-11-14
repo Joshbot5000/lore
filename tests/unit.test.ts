@@ -3,7 +3,7 @@ import { describeWhen, parseWhen, speakable, takeSentences } from '../src/shared
 import { expand, parseIcs } from '../src/brain/ics';
 import { parseForecast, weatherSentence } from '../src/brain/weather';
 import { parseDuck } from '../src/brain/web';
-import { splitCommands } from '../src/brain/brain';
+import { splitCommands, wantsAction } from '../src/brain/brain';
 
 const now = new Date(2026, 10, 14, 8, 40); // Saturday 14 Nov 2026, 08:40
 const at = (s: string) => { const t = parseWhen(s, now); return t === null ? null : new Date(t).toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); };
@@ -82,5 +82,12 @@ describe('compound commands', () => {
     expect(splitCommands('Remind me to buy bread and butter')).toEqual(['Remind me to buy bread and butter']);
     expect(splitCommands("What's on my calendar today, and do I have any unread emails?")).toHaveLength(1);
     expect(splitCommands('Add milk to my list and remind me to call mum tomorrow at 5')).toEqual(['Add milk to my list', 'remind me to call mum tomorrow at 5']);
+  });
+});
+
+describe('wantsAction', () => {
+  it('tells requests from questions and chat', () => {
+    for (const t of ['Open Safari', 'Jarvis, could you turn the volume down?', 'please remind me to call mum', "I've finished calling the dentist", 'Can you play some music?', 'Track Spotify, 11.99 a month', 'look up the weather in Paris']) expect(wantsAction(t), t).toBe(true);
+    for (const t of ['Do I have any unread emails?', "What's on today?", 'How are you?', 'Who wrote Pride and Prejudice?', 'Good morning', 'What should I focus on today?', 'I think we should order pizza']) expect(wantsAction(t), t).toBe(false);
   });
 });
