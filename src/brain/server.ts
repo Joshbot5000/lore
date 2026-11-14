@@ -21,6 +21,14 @@ export function serveBrain(brain: Brain, opts: { port: number; uiDir: string; ho
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     if (url.pathname === '/health') return void res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true,"app":"jarvis"}');
+    if (url.pathname === '/manifest.webmanifest') {
+      const file = path.join(opts.uiDir, 'manifest.webmanifest');
+      if (!fs.existsSync(file)) return void res.writeHead(404).end();
+      const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+      // Carry the pairing key into the installed app (its storage is separate from the browser's on iOS).
+      if (url.searchParams.get('k') === token) manifest.start_url = `./?k=${token}`;
+      return void res.writeHead(200, { 'Content-Type': TYPES['.webmanifest'], 'Cache-Control': 'no-store' }).end(JSON.stringify(manifest));
+    }
     let rel = decodeURIComponent(url.pathname).replace(/^\/+/, '') || 'index.html';
     let file = path.join(opts.uiDir, rel);
     if (!file.startsWith(opts.uiDir) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) (rel = 'index.html'), (file = path.join(opts.uiDir, rel));

@@ -43,13 +43,20 @@ export const toast = (text: string, tone: Toast['tone'] = 'info'): void => {
 
 const params = new URLSearchParams(location.search);
 const fromUrl = params.get('k');
-if (fromUrl) {
-  localStorage.setItem('jarvis.k', fromUrl);
-  // Keep the pairing key out of the address bar and browser history.
-  params.delete('k');
-  history.replaceState(null, '', location.pathname + (params.toString() ? `?${params}` : ''));
+if (fromUrl) localStorage.setItem('jarvis.k', fromUrl);
+export const token = (): string => fromUrl ?? localStorage.getItem('jarvis.k') ?? '';
+// The pairing key stays in the address: an app added to the iPhone home screen has its own storage,
+// so the address (and the manifest's start address) is what carries the key into it.
+if (token() && !fromUrl) {
+  params.set('k', token());
+  history.replaceState(null, '', `${location.pathname}?${params}`);
 }
-export const token = (): string => localStorage.getItem('jarvis.k') ?? '';
+if (token()) {
+  const link = document.createElement('link');
+  link.rel = 'manifest';
+  link.href = `./manifest.webmanifest?k=${encodeURIComponent(token())}`;
+  document.head.appendChild(link);
+}
 export const isPhone = /iPhone|iPad|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 900);
 const device = isPhone ? 'phone' : 'mac';
 
