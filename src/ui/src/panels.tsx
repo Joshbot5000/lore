@@ -5,7 +5,7 @@ import { unlock } from './voice';
 import { Core } from './Core';
 import { gb } from './bits';
 import { VOICES } from '../../shared/types';
-import type { ModelInfo, Settings } from '../../shared/types';
+import type { MacVoice, ModelInfo, Settings } from '../../shared/types';
 
 const save = (patch: Partial<Settings>) => act('saveSettings', patch as Record<string, unknown>);
 export const ACCENTS: [string, string, string][] = [['arc', 'Arc', '#5ee6ff'], ['ember', 'Ember', '#ff5a3c'], ['verdant', 'Verdant', '#5dfc9b'], ['violet', 'Violet', '#a78bfa'], ['gold', 'Gold', '#ffc857']];
@@ -82,12 +82,8 @@ export function SettingsPanel() {
 
       <h3>Voice</h3>
       <Field label="Speak replies aloud"><Toggle on={s.speak} onChange={(v) => save({ speak: v })} /></Field>
-      <div className="voices">
-        {VOICES.map(([id, label]) => (
-          <button key={id} className={s.voice === id ? 'on' : ''} onClick={() => (unlock(), save({ voice: id }), void call('previewVoice', { voice: id }).catch((e: Error) => toast(e.message, 'alert')))}><Play size={12} /> {label}</button>
-        ))}
-      </div>
-      <Field label="Pace" hint={`${s.speed.toFixed(2)}×`}><input type="range" min={0.8} max={1.4} step={0.05} value={s.speed} onChange={(e) => save({ speed: +e.target.value })} /></Field>
+      <VoicePicker />
+      <Field label="Pace" hint={`${s.speed.toFixed(2)}×`}><input type="range" min={0.8} max={1.3} step={0.05} value={s.speed} onChange={(e) => save({ speed: +e.target.value })} /></Field>
 
       <h3>Look</h3>
       <div className="accents">{ACCENTS.map(([id, label, color]) => <button key={id} className={s.accent === id ? 'on' : ''} style={{ ['--c' as string]: color }} onClick={() => save({ accent: id })}><i />{label}</button>)}</div>
@@ -216,6 +212,30 @@ function MailAccounts() {
       </div>
       <i className={/Couldn't/.test(msg) || (!msg && mail.state === 'error') ? 'bad' : ''}>{msg || (mail.state === 'error' && mail.detail) || MAIL_KINDS.find((k) => k[0] === f.preset)![2]}</i>
     </div>
+  );
+}
+
+function VoicePicker() {
+  const voice = useSnap((x) => x.settings.voice);
+  const [mac, setMac] = useState<MacVoice[]>([]);
+  useEffect(() => void call<MacVoice[]>('macVoices').then(setMac).catch(() => undefined), []);
+  const pick = (id: string) => (unlock(), save({ voice: id }), void call('previewVoice', { voice: id }).catch((e: Error) => toast(e.message, 'alert')));
+  const good = mac.filter((v) => v.quality !== 'standard');
+  return (
+    <>
+      <p className="lead">Tap a voice to hear it. Trust your ear: pick whichever sounds most like a person to you.</p>
+      <span className="label dim">Built-in voices</span>
+      <div className="voices">
+        {VOICES.map(([id, label]) => <button key={id} className={voice === id ? 'on' : ''} onClick={() => pick(id)}><Play size={12} /> {label}</button>)}
+      </div>
+      <span className="label dim">Your Mac's voices</span>
+      {good.length > 0 && (
+        <div className="voices">
+          {good.map((v) => <button key={v.id} className={voice === v.id ? 'on' : ''} onClick={() => pick(v.id)}><Play size={12} /> {v.name.replace(/\s*\((Premium|Enhanced)\)/, '')} · {v.lang === 'en_GB' ? 'British' : v.lang === 'en_US' ? 'American' : v.lang.slice(3)}, {v.quality}</button>)}
+        </div>
+      )}
+      <p className="lead dim">{good.length ? 'More can be added the same way: ' : 'Apple offers free, very natural “Premium” voices that I can speak with. To add one: '}open System Settings → Accessibility → Spoken Content → System Voice → Manage Voices, choose English (UK) or English (US), and download a voice marked Premium (Jamie and Serena are British). Then reopen this panel and it appears here.</p>
+    </>
   );
 }
 

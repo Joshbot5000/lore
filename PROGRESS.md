@@ -57,3 +57,11 @@ then tests/chat.mjs, tests/voice.mjs, tests/look.mjs against the printed address
       Also tuned for his Mac (M1, 8 GB): smaller LLM context; Hark releases its model when idle.
       Test: `node tests/study.mjs <study-folder> [--llm]` (20 checks). Live fetch from github.com is untested
       here (tested against a stand-in server and the cloned folder).
+
+- [x] Round 5 (15 Nov): voice. Josh: "still sounds way too stunted and robotic". Changes: sentences that arrive
+      while the voice is busy are synthesised together as one passage (first passage short, later ones up to
+      300 chars) instead of one clip per sentence; clause-splitting removed; pace 1.0; default voice is now a
+      blend (bm_george*0.55+bm_fable*0.45; blending done in src/workers/tts.ts by overriding generate_from_ids);
+      Mac system voices via `say` (src/brain/mac.ts voices/speak) selectable in Settings.
+      Nobody has listened to any of this: the build container has no audio. Voice choice has to be made by ear
+      on his Mac. Not done, needs his decision: a cloud voice (needs an account/key, sends replies off the Mac).

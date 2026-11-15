@@ -19,7 +19,7 @@ import { HomeAssistant, isOn, matchEntities, parseHomeCommand, tapService, type 
 import { MAIL_PRESETS, fetchUnread } from './imap';
 import fs from 'node:fs';
 import { contentWords, deckStats, fetchRepo, grade, isDue, isRepo, looksLegal, matchDecks, pickCards, readFolder, record, studyContext, vocabulary, type Card, type Library } from './study';
-import { uid } from '../shared/types';
+import { DEFAULT_SETTINGS, uid } from '../shared/types';
 import type { Focus, FocusNow, Habit, Recording, Routine } from '../shared/types';
 import type { CalEvent, ChatMsg, EngineStatus, HomeAction, Integrations, Mail, Memory, Need, NowPlaying, Push, Settings, Snapshot, Task, Timer, ToolUse, Vitals, Weather } from '../shared/types';
 
@@ -75,6 +75,23 @@ export function splitCommands(text: string): string[] {
   return parts.map((p) => p.trim().replace(/[.!]+$/, ''));
 }
 
+/** Cut the silence a voice pads its clips with (16-bit samples), leaving a few milliseconds and a soft edge. */
+export function trimPcm(pcm: Buffer, rate = 24000): Buffer {
+  const n = pcm.length >> 1, quiet = 200, keep = Math.round(rate * 0.012);
+  let a = 0, b = n - 1;
+  while (a < b && Math.abs(pcm.readInt16LE(a * 2)) < quiet) a++;
+  while (b > a && Math.abs(pcm.readInt16LE(b * 2)) < quiet) b--;
+  a = Math.max(0, a - keep);
+  b = Math.min(n - 1, b + keep * 3);
+  const out = Buffer.from(pcm.subarray(a * 2, (b + 1) * 2));
+  const len = out.length >> 1, fade = Math.min(Math.round(rate * 0.006), len >> 1);
+  for (let i = 0; i < fade; i++) {
+    out.writeInt16LE(Math.round(out.readInt16LE(i * 2) * (i / fade)), i * 2);
+    out.writeInt16LE(Math.round(out.readInt16LE((len - 1 - i) * 2) * (i / fade)), (len - 1 - i) * 2);
+  }
+  return out;
+}
+
 export class Brain extends EventEmitter {
   readonly store: Store;
   readonly models: Models;
@@ -118,6 +135,8 @@ export class Brain extends EventEmitter {
     super();
     this.store = new Store(o.dataDir);
     this.models = new Models(o.modelsDir, o.fetch as never);
+    // The first voice (George at 1.05x) was replaced by a smoother blend at a natural pace: move anyone still on the old default.
+    if (this.store.get('settings').voice === 'bm_george' && this.store.get('settings').speed === 1.05) this.patchSettings({ voice: DEFAULT_SETTINGS.voice, speed: DEFAULT_SETTINGS.speed }, true);
     if (!this.store.get('settings').onboarded && this.store.get('settings').llmModel === 'qwen-4b') this.patchSettings({ llmModel: recommendedLlm(this.ramGb) }, true);
     this.status = { llm: 'missing', asr: 'missing', voice: 'missing', ramGb: this.ramGb };
 
@@ -1111,7 +1130,7 @@ export class Brain extends EventEmitter {
     const address = s.address === 'name' ? (s.userName ? `Call them ${s.userName}, sparingly.` : '') : `Address them as "${this.you()}", sparingly.`;
     return `You are ${s.assistantName}, ${who}'s personal assistant, running privately on their own computer. You are calm, capable and quick, with a dry British wit that you use lightly. ${address}
 
-Your replies are spoken aloud, so write the way a person talks: one or two short sentences, contractions, plain words, no lists, no markdown, no emoji, no brackets. Give the answer first, in the first few words. Don't repeat the question back or pad with offers of more help. Never read out raw data such as URLs or IDs.
+Your replies are spoken aloud by a voice, so write exactly what a warm, quick-witted person would say out loud in conversation: one or two flowing sentences, contractions throughout (it's, you've, I'll), plain everyday words, no lists, no markdown, no emoji, no brackets, no abbreviations a voice would stumble on. Let sentences run naturally rather than clipping them into fragments. Give the answer first, in the first few words. Don't repeat the question back or pad with offers of more help. Never read out raw data such as URLs or IDs.
 
 Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music, focus time, habits, countdowns, sometimes their recorded conversations or clipboard, and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. Act only on the newest message: everything earlier in the conversation has already been dealt with. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
   }
@@ -1323,24 +1342,57 @@ Each request comes with a <context> block. It is your live view of their world: 
   private speakChain: Promise<void> = Promise.resolve();
   private speakSeq = new Map<string, number>();
 
-  /** Turn text into speech and send it to every connected device, in order. */
+  private waiting = new Map<string, string[]>();
+
+  /** Synthesize with whichever voice is chosen: one of the Mac's own, or the built-in neural voice. */
+  private async synth(text: string, voice: string, speed: number): Promise<string> {
+    if (voice.startsWith('mac:')) {
+      try {
+        return `24000:${trimPcm(await this.o.mac.speak(voice.slice(4), text, speed)).toString('base64')}`;
+      } catch {
+        voice = DEFAULT_SETTINGS.voice; // that Mac voice has gone: fall back rather than go silent
+      }
+    }
+    if (!this.models.installed('voice')) throw new Error('The voice has not been downloaded yet.');
+    await this.ensureVoice();
+    const out = await this.voice.call<{ pcm: string; rate: number }>('speak', { text, voice, speed });
+    return `${out.rate}:${out.pcm}`;
+  }
+
+  private canSpeak(): boolean {
+    return this.settings.voice.startsWith('mac:') || this.models.installed('voice');
+  }
+
+  /**
+   * Turn text into speech and send it to every connected device, in order.
+   * Sentences that arrive while the voice is busy are spoken together as one passage: a voice
+   * reads two sentences in one breath far more naturally than it reads them one at a time.
+   */
   private speakOut(turn: string, text: string, last = false): Promise<void> {
     const clean = speakable(text);
     const s = this.settings;
+    if (clean) this.waiting.set(turn, [...(this.waiting.get(turn) ?? []), clean]);
     this.speakChain = this.speakChain.then(async () => {
-      if (!clean && !last) return;
       const seq = this.speakSeq.get(turn) ?? 0;
+      const queue = this.waiting.get(turn) ?? [];
+      // The opening passage is kept short so speech starts promptly; later ones can run longer.
+      const limit = seq === 0 ? 95 : 300;
+      const take: string[] = [];
+      while (queue.length && (!take.length || take.join(' ').length + queue[0].length < limit)) take.push(queue.shift()!);
+      if (!queue.length) this.waiting.delete(turn);
+      const passage = take.join(' ');
+      if (!passage && !last) return;
       this.speakSeq.set(turn, seq + 1);
-      if (!clean || !this.models.installed('voice') || (this.activeTurn !== turn && !turn.startsWith('n') && !turn.startsWith('p'))) {
+      if (this.speakSeq.size > 40) this.speakSeq.delete(this.speakSeq.keys().next().value!);
+      if (!passage || !this.canSpeak() || (this.activeTurn !== turn && !turn.startsWith('n') && !turn.startsWith('p'))) {
         if (last) this.push({ type: 'audio', turn, seq, wav: '', text: '', last: true });
         return;
       }
       try {
-        await this.ensureVoice();
-        const out = await this.voice.call<{ pcm: string; rate: number }>('speak', { text: clean, voice: s.voice, speed: s.speed });
+        const wav = await this.synth(passage, s.voice, s.speed);
         // A breath after a sentence, a beat after a clause.
-        const gap = /[.!?…]["')\]]?$/.test(clean) ? 230 : /[,;:—–]$/.test(clean) ? 90 : 50;
-        this.push({ type: 'audio', turn, seq, wav: `${out.rate}:${out.pcm}`, text: clean, last, gap });
+        const gap = /[.!?…]["')\]]?$/.test(passage) ? 280 : /[,;:—–]$/.test(passage) ? 110 : 60;
+        this.push({ type: 'audio', turn, seq, wav, text: passage, last: last && !this.waiting.has(turn), gap });
         this.mark(turn, 'voice');
       } catch {
         if (last) this.push({ type: 'audio', turn, seq, wav: '', text: '', last: true });
@@ -1352,9 +1404,9 @@ Each request comes with a <context> block. It is your live view of their world: 
   async previewVoice(voice: string): Promise<void> {
     const turn = `p${++this.turnSeq}`;
     const s = this.settings;
-    await this.ensureVoice();
-    const out = await this.voice.call<{ pcm: string; rate: number }>('speak', { text: `Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}${s.userName ? ', ' + s.userName : ''}. All systems are online.`, voice, speed: s.speed });
-    this.push({ type: 'audio', turn, seq: 0, wav: `${out.rate}:${out.pcm}`, text: '', last: true });
+    const h = new Date().getHours();
+    const wav = await this.synth(`Good ${h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening'}${s.userName ? ', ' + s.userName : ''}. I've had a look at your day, and there's nothing urgent. Shall we get started?`, voice, s.speed);
+    this.push({ type: 'audio', turn, seq: 0, wav, text: '', last: true });
   }
 
   stopTalking(): void {
@@ -1476,11 +1528,6 @@ Each request comes with a <context> block. It is your live view of their world: 
       const cut = takeSentences(pending + c.delta);
       pending = cut.rest;
       for (const sentence of cut.sentences) (void this.speakOut(turn, sentence), (spoke = true));
-      // Start talking at the first natural break rather than waiting for a whole sentence.
-      if (!spoke) {
-        const clause = pending.match(/^(.{18,}?[,;:—–])\s+(?=\S)/);
-        if (clause) (void this.speakOut(turn, clause[1]), (spoke = true), (pending = pending.slice(clause[0].length)));
-      }
     };
     const done = new Set<string>();
     const onTool = async (c: { streamId: string; callId: string; name: string; args: any }) => {
@@ -1598,6 +1645,7 @@ Each request comes with a <context> block. It is your live view of their world: 
     stop: () => this.stopTalking(),
     briefing: () => void this.briefing(),
     previewVoice: (p: { voice: string }) => this.previewVoice(p.voice),
+    macVoices: () => this.o.mac.voices().catch(() => []),
     clearChat: () => (this.store.set('chat', []), this.patch({ chat: [] })),
     addTask: (p: { title: string; when?: string }) => this.tools().find((t) => t.name === 'add_task')!.run(p),
     updateTask: (p: { id: string; patch: Partial<Task> }) => {

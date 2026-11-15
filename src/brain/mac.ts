@@ -5,7 +5,9 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import os from 'node:os';
-import type { CalEvent, Mail, NowPlaying } from '../shared/types';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { CalEvent, MacVoice, Mail, NowPlaying } from '../shared/types';
 
 export type MacBridge = {
   real: boolean;
@@ -22,6 +24,10 @@ export type MacBridge = {
   setVolume(percent: number): Promise<void>;
   battery(): Promise<{ percent: number; charging: boolean } | null>;
   system(action: 'lock' | 'sleep-display' | 'dark-mode' | 'mute' | 'unmute'): Promise<void>;
+  /** English voices installed on this Mac, best first. */
+  voices(): Promise<MacVoice[]>;
+  /** Speak with one of the Mac's own voices. Returns 24 kHz 16-bit mono samples. */
+  speak(voice: string, text: string, speed: number): Promise<Buffer>;
   /** The text currently on the clipboard (only read when the user asks about it). */
   clipboard(): Promise<string>;
   setClipboard(text: string): Promise<void>;
@@ -170,6 +176,21 @@ end tell`,
     else await osa(`set volume output muted ${action === 'mute'}`);
   },
 
+  async voices() {
+    const out = await run('say', ['-v', '?']);
+    return parseSayVoices(out);
+  },
+  async speak(voice, text, speed) {
+    const file = path.join(os.tmpdir(), `jarvis-say-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.wav`);
+    try {
+      // 175 words a minute is the system's normal pace.
+      await run('say', ['-v', voice, '-r', String(Math.round(178 * speed)), '--file-format=WAVE', '--data-format=LEI16@24000', '-o', file, '--', text], 30000);
+      return wavSamples(fs.readFileSync(file));
+    } finally {
+      fs.rm(file, { force: true }, () => undefined);
+    }
+  },
+
   clipboard: () => run('pbpaste', []),
   setClipboard: (text) =>
     new Promise((resolve, reject) => {
@@ -231,9 +252,40 @@ export function fakeMac(): MacBridge {
     setVolume: async (p) => void (volume = p),
     battery: async () => ({ percent: 82, charging: false }),
     system: async () => undefined,
+    voices: async () => parseSayVoices('Daniel              en_GB    # Hello! My name is Daniel.\nJamie (Premium)     en_GB    # Hello! My name is Jamie.\nSerena (Enhanced)   en_GB    # Hello! My name is Serena.\nThomas              fr_FR    # Bonjour!\nZoe (Premium)       en_US    # Hello! My name is Zoe.'),
+    async speak(_voice, text) {
+      // A tone, padded with silence the way real voices are, so trimming can be tested.
+      const n = Math.round(24000 * Math.min(4, 0.3 + text.length * 0.04)), pad = 4800;
+      const b = Buffer.alloc((n + pad * 2) * 2);
+      for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.sin((i / 24000) * 2 * Math.PI * 220) * 9000), (pad + i) * 2);
+      return b;
+    },
     clipboard: async () => clip,
     setClipboard: async (t) => void (clip = t),
   };
+}
+
+/** `say -v ?` prints one voice per line: name, locale, then a sample sentence. */
+export function parseSayVoices(out: string): MacVoice[] {
+  const rank = { premium: 0, enhanced: 1, standard: 2 };
+  return out.split('\n').map((line) => {
+    const m = line.match(/^(.+?)\s{2,}([a-z]{2}_[A-Z]{2})\s+#/);
+    if (!m || !/^en_/.test(m[2])) return null;
+    const name = m[1].trim();
+    const quality: MacVoice['quality'] = /\(Premium\)/i.test(name) ? 'premium' : /\(Enhanced\)/i.test(name) ? 'enhanced' : 'standard';
+    return { id: `mac:${name}`, name, lang: m[2], quality };
+  }).filter((v): v is MacVoice => !!v).sort((a, b) => rank[a.quality] - rank[b.quality] || (a.lang === 'en_GB' ? -1 : 1) - (b.lang === 'en_GB' ? -1 : 1) || a.name.localeCompare(b.name));
+}
+
+/** The samples inside a WAV file (skips the header, whatever its length). */
+export function wavSamples(wav: Buffer): Buffer {
+  let at = 12;
+  while (at + 8 <= wav.length) {
+    const id = wav.toString('ascii', at, at + 4), size = wav.readUInt32LE(at + 4);
+    if (id === 'data') return wav.subarray(at + 8, Math.min(wav.length, at + 8 + size));
+    at += 8 + size + (size % 2);
+  }
+  return wav.subarray(Math.min(44, wav.length));
 }
 
 export const pickMac = (): MacBridge => (process.env.JARVIS_FAKE_MAC || os.platform() !== 'darwin' ? fakeMac() : realMac);

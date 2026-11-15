@@ -11,6 +11,7 @@ no subscription, no usage limits, and nothing you say is uploaded.
 | | |
 |---|---|
 | **Talk** | Hold the space bar (or hold the glowing core) and speak. Or switch on **hands-free** and just say “Jarvis, …”. Replies are spoken in a neural British voice (ten voices to choose from), streamed sentence by sentence. Esc interrupts |
+| **Voices** | Twelve built-in neural voices, including blends of two voices, spoken in flowing passages rather than sentence by sentence. Or use one of your Mac's own voices: download a free Premium voice in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices and pick it in Settings → Voice |
 | **Remembers you** | Say “remember that…” or just talk: he quietly notes lasting things (who people are, what you like, where you need to be) and recalls the relevant ones by meaning in later conversations. Review, pin or delete anything in **Memory** |
 | **Daily briefing** | “Brief me”: weather, today's calendar, what is due, unread mail, bills about to go out. Built from real data, never invented |
 | **Reminders and tasks** | “Remind me to call the dentist tomorrow at 9.” Spoken reminder and notification when it is due. Now / Week / Later views |

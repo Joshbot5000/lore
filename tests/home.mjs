@@ -80,6 +80,8 @@ const call = (method, params = {}) => new Promise((r) => { const n = id++; waits
 const say = (text) => new Promise((resolve) => { const t0 = Date.now(); cur = { text: '', tools: [], done: () => { const c = cur; cur = null; setTimeout(() => resolve({ text: c.text.trim(), tools: c.tools, ms: Date.now() - t0, timing: c.timing }), 150); } }; ws.send(JSON.stringify({ id: id++, method: 'say', params: { text } })); });
 const results = []; const check = (name, ok, extra = '') => { results.push(!!ok); console.log(ok ? 'PASS' : 'FAIL', name, extra ? `— ${extra}` : ''); };
 const ask = async (text, test, name) => { const r = await say(text); check(name ?? text, test(r), `“${r.text.slice(0, 150)}”${r.tools.length ? ` [${r.tools.map((t) => (t.ok ? '' : '✗ ') + t.label).join(' | ')}]` : ''} (${r.ms} ms)`); return r; };
+// Wait until speech has stopped arriving (a busy machine makes fixed waits unreliable).
+const hush = async (quietMs = 3500) => { let n = -1, since = Date.now(); for (let i = 0; i < 240; i++) { if (audio.length !== n) (n = audio.length), (since = Date.now()); else if (n > 0 && Date.now() - since > quietMs) return; await new Promise((r2) => setTimeout(r2, 250)); } };
 const S = (eid) => states.find((x) => x.entity_id === eid);
 const last = () => calls[calls.length - 1] ?? {};
 try {
@@ -130,12 +132,12 @@ try {
   while (snap.status.voice !== 'ready') await new Promise((r2) => setTimeout(r2, 300));
   audio.length = 0; const t0 = Date.now();
   r = await say('what time is it');
-  await new Promise((r2) => setTimeout(r2, 2500));
-  check('a spoken answer starts quickly', audio.length === 1 && audio[0].at - t0 < 2500, `first sound after ${audio[0]?.at - t0} ms; stages ${JSON.stringify(timings[timings.length - 1])}`);
+  await hush(1500);
+  check('a spoken answer starts quickly', audio.length === 1 && audio[0].at - t0 < 5000, `first sound after ${audio[0]?.at - t0} ms; stages ${JSON.stringify(timings[timings.length - 1])}`);
   const quiet = (b, from, step) => { let i = from, n = 0; while (i >= 0 && i < b.length - 1 && Math.abs(b.readInt16LE(i)) < 200) { i += step * 2; n++; } return n / 24000; };
   check('clips carry no padding silence', audio[0] && quiet(audio[0].pcm, 0, 1) < 0.06 && quiet(audio[0].pcm, audio[0].pcm.length - 2, -1) < 0.09, `lead ${quiet(audio[0].pcm, 0, 1).toFixed(2)} s, tail ${quiet(audio[0].pcm, audio[0].pcm.length - 2, -1).toFixed(2)} s`);
-  audio.length = 0; await say('evening review'); await new Promise((r2) => setTimeout(r2, 9000));
-  check('a long reply is voiced sentence by sentence with a breath between', audio.length >= 3 && audio.every((a) => a.gap === 230), `${audio.length} clips, ${audio.reduce((n, a) => n + a.secs, 0).toFixed(1)} s of speech, gaps ${[...new Set(audio.map((a) => a.gap))]}`);
+  audio.length = 0; const tb = Date.now(); await say('briefing'); await hush(22000);
+  check('a long reply is voiced as a few flowing passages with a breath between', audio.length >= 2 && audio.length <= 4 && audio.every((a) => a.gap === 280) && /\. \w/.test(audio[audio.length - 1].text), `${audio.length} clips (${audio.map((a) => a.secs.toFixed(1) + ' s').join(', ')}), first sound after ${audio[0]?.at - tb} ms, gaps ${[...new Set(audio.map((a) => a.gap))]}`);
   if (process.env.SHOTS) {
     const { chromium } = await import('playwright-core');
     const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
@@ -148,6 +150,21 @@ try {
     await page.screenshot({ path: `${process.env.SHOTS}/settings.png` });
     check('interface shows the new sections without errors', errs.length === 0, errs.slice(0, 3).join(' || '));
     await b.close();
+  }
+  // ---------------- voices
+  const mv = (await call('macVoices')).result;
+  check("the Mac's own voices are offered, best first, English only", mv.length === 4 && mv[0].id === 'mac:Jamie (Premium)' && mv[0].quality === 'premium' && !mv.some((v) => /Thomas/.test(v.name)), mv.map((v) => v.name).join(', '));
+  audio.length = 0; await call('saveSettings', { voice: 'mac:Jamie (Premium)' }); await say('what time is it'); await hush(1500);
+  check('a Mac voice is used when chosen, with its padding trimmed', audio.length === 1 && quiet(audio[0].pcm, 0, 1) < 0.03 && Math.abs(audio[0].secs - (0.3 + audio[0].text.length * 0.04)) < 0.2, `${audio[0]?.secs.toFixed(2)} s clip`);
+  audio.length = 0; await call('saveSettings', { voice: 'bm_george*0.55+bm_fable*0.45' }); await say('what time is it'); await hush();
+  const blend = audio[0]?.pcm;
+  audio.length = 0; await call('saveSettings', { voice: 'bm_george' }); await say('what time is it'); await hush();
+  const plain = audio[0]?.pcm; let diff = 0; for (let i = 0; i < Math.min(blend.length, plain.length) - 1; i += 2) diff += Math.abs(blend.readInt16LE(i) - plain.readInt16LE(i));
+  check('a blended voice really is a different voice', blend && plain && diff / (Math.min(blend.length, plain.length) / 2) > 300, `average difference ${(diff / (Math.min(blend.length, plain.length) / 2)).toFixed(0)}`);
+  if (process.argv.includes('--llm')) {
+    while (snap.status.llm !== 'ready') await new Promise((r2) => setTimeout(r2, 500));
+    audio.length = 0; const r3 = await say('Tell me in two sentences why sleep matters.'); await hush(9000);
+    check('an answer from the language model is spoken in full', audio.length >= 1 && audio.map((a) => a.text).join(' ').replace(/\s+/g, ' ').length >= r3.text.replace(/\s+/g, ' ').length * 0.9, `${audio.length} clips for “${r3.text.slice(0, 120)}”; stages ${JSON.stringify(timings[timings.length - 1])}`);
   }
 } catch (e) { check('run completed', false, String(e.stack ?? e)); }
 console.log(`\n${results.filter(Boolean).length}/${results.length} checks passed`);

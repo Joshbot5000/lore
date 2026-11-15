@@ -82,7 +82,7 @@ export type Settings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  userName: '', address: 'name', assistantName: 'Jarvis', place: '', units: 'c', voice: 'bm_george', speed: 1.05, speak: true, wake: false,
+  userName: '', address: 'name', assistantName: 'Jarvis', place: '', units: 'c', voice: 'bm_george*0.55+bm_fable*0.45', speed: 1, speak: true, wake: false,
   accent: 'arc', asrModel: 'whisper-base', llmModel: 'qwen-4b', calendarUrls: [], useAppleCalendar: true, useAppleMail: true, musicApp: 'Spotify',
   homeShortcuts: [], currency: '£', onboarded: false, briefingHour: 8, focusGoal: 120, hotkey: 'Alt+Space', useHark: true, haUrl: '', haEntities: [], mailAccounts: [], studySource: 'Joshbot5000/Law-Conversion-Course',
 };
@@ -134,10 +134,14 @@ export type Push =
   | { type: 'notify'; title: string; body: string; speak?: string }
   | { type: 'summon' };
 
+/** Built-in neural voices. Blends mix two voices (name*weight+name*weight), which smooths out each one's quirks. */
 export const VOICES: [string, string][] = [
-  ['bm_george', 'George · British, measured'], ['bm_fable', 'Fable · British, warm'], ['bm_lewis', 'Lewis · British, deep'], ['bm_daniel', 'Daniel · British, bright'],
-  ['bf_emma', 'Emma · British'], ['bf_isabella', 'Isabella · British'], ['am_michael', 'Michael · American'], ['am_fenrir', 'Fenrir · American, low'],
-  ['af_heart', 'Heart · American'], ['af_bella', 'Bella · American'],
+  ['bm_george*0.55+bm_fable*0.45', 'Jarvis · British, smooth blend'], ['bm_george', 'George · British, measured'], ['bm_fable', 'Fable · British, warm'],
+  ['bm_george*0.6+am_michael*0.4', 'Atlas · mid-Atlantic, deeper'], ['bf_emma', 'Emma · British, clear'], ['bf_emma*0.6+af_heart*0.4', 'Ivy · British, soft blend'],
+  ['af_heart', 'Heart · American, the most natural'], ['af_bella', 'Bella · American, lively'], ['af_heart*0.5+af_bella*0.5', 'Nova · American, warm blend'],
+  ['am_michael', 'Michael · American'], ['am_fenrir', 'Fenrir · American, low'], ['bm_lewis', 'Lewis · British, deep'],
 ];
+/** A voice installed on the Mac itself (System Settings → Accessibility → Spoken Content). */
+export type MacVoice = { id: string; name: string; lang: string; quality: 'premium' | 'enhanced' | 'standard' };
 
 export const uid = (): string => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
