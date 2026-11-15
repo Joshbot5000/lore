@@ -3,7 +3,7 @@ import { Brain, CalendarDays, LayoutGrid, Radio, Settings as Cog, Smartphone, Vo
 import { act, isPhone, set, token, useLink, useSnap } from './link';
 import { unlock } from './voice';
 import { ClockCard, CoreCard, HomeCard, InboxCard, MoneyCard, MusicCard, NotebookCard, TasksCard, UpcomingCard, VitalsCard, WeatherCard } from './cards';
-import { CountdownCard, FocusCard, HabitsCard } from './life';
+import { CountdownCard, FocusCard, HabitsCard, RevisionCard } from './life';
 import { ACCENTS, LogPanel, MindPanel, Onboarding, PairPanel, SettingsPanel } from './panels';
 import type { Integrations } from '../../shared/types';
 
@@ -84,7 +84,7 @@ export function App() {
             <InboxCard /><TasksCard />
             <MusicCard /><HomeCard /><MoneyCard />
             <FocusCard /><HabitsCard /><CountdownCard />
-            <NotebookCard /><VitalsCard />
+            <RevisionCard /><NotebookCard /><VitalsCard />
           </main>
           <Dock />
         </>

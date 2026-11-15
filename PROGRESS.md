@@ -49,3 +49,11 @@ Wants it working by 12pm UK time on 14 Nov.
 ## How to run the tests here
 JARVIS_FAKE_MAC=1 JARVIS_DATA_DIR=/tmp/jv-data JARVIS_MODELS_DIR=/home/user/hark/scratch/models node out/main/headless.js
 then tests/chat.mjs, tests/voice.mjs, tests/look.mjs against the printed address; tests/shell.mjs under xvfb-run.
+
+- [x] Round 4 (15 Nov): revision from Josh's study repository (Joshbot5000/Law-Conversion-Course, the default
+      `studySource`): src/brain/study.ts. Flashcard quiz by voice or tap with Leitner spaced repetition
+      (progress in study.json), marking by keyword coverage plus a contradiction check (the user can overrule),
+      law questions answered from the notes, and a spoken caveat when the notes don't cover a legal question.
+      Also tuned for his Mac (M1, 8 GB): smaller LLM context; Hark releases its model when idle.
+      Test: `node tests/study.mjs <study-folder> [--llm]` (20 checks). Live fetch from github.com is untested
+      here (tested against a stand-in server and the cloned folder).

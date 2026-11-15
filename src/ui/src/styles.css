@@ -60,8 +60,9 @@ h1, h2, h3, p, ul, ol { margin: 0; padding: 0; } ul { list-style: none; }
     'upcoming upcoming upcoming core core core core core core tasks tasks tasks'
     'music music music music home home home home money money money money'
     'focus focus focus focus habits habits habits habits dates dates dates dates'
-    'notebook notebook notebook notebook notebook notebook vitals vitals vitals vitals vitals vitals'; }
-@media (max-width: 1180px) { .desk .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'core core' 'clock weather' 'tasks inbox' 'upcoming music' 'home money' 'focus habits' 'dates notebook' 'vitals vitals'; } }
+    'revise revise revise revise revise revise notebook notebook notebook notebook notebook notebook'
+    'vitals vitals vitals vitals vitals vitals vitals vitals vitals vitals vitals vitals'; }
+@media (max-width: 1180px) { .desk .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: 'core core' 'clock weather' 'tasks inbox' 'upcoming music' 'home money' 'focus habits' 'revise revise' 'dates notebook' 'vitals vitals'; } }
 .dock { display: none; }
 
 /* ---------- cards ---------- */
@@ -230,3 +231,11 @@ input[type='range'] { -webkit-appearance: none; appearance: none; flex: 1; heigh
 .tiles button em { font: 500 11px var(--mono); font-style: normal; color: var(--text3); flex: none; }
 .field.stack .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; width: 100%; } .field.stack .row .search { flex: 1; min-width: 150px; }
 .field i.bad { color: var(--alert); }
+
+/* ---------- revision ---------- */
+.decks .btn { flex: none; } .deck-bar { width: 70px; height: 4px; border-radius: 4px; background: var(--hair); overflow: hidden; flex: none; } .deck-bar i { display: block; height: 100%; background: var(--accent); box-shadow: 0 0 8px rgba(var(--accent-rgb), .6); }
+.quiz { display: flex; flex-direction: column; gap: 10px; flex: 1; }
+.quiz-q { font: 500 18px/1.4 var(--display); color: var(--text); }
+.quiz-last { font-size: 13px; line-height: 1.5; color: var(--text2); padding: 8px 11px; border-radius: 9px; border: 1px solid var(--hair); background: var(--panel2); max-height: 96px; overflow-y: auto; }
+.quiz-last b { font: 600 10.5px var(--mono); letter-spacing: .14em; text-transform: uppercase; margin-right: 6px; color: var(--accent2); } .quiz-last.right b { color: var(--ok); } .quiz-last.wrong b { color: var(--alert); }
+.quiz-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }

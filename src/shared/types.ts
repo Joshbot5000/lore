@@ -14,6 +14,12 @@ export type Countdown = { id: string; title: string; date: number };
 export type Routine = { id: string; name: string; steps: string[] };
 /** A conversation recorded in Hark (read-only). */
 export type Recording = { id: string; title: string; at: number; minutes: number; overview: string; open: number };
+/** Revision material and the flashcard quiz in progress, as the dashboard sees them. */
+export type StudyView = {
+  source: string; syncedAt: number; error?: string; due: number; cards: number; notes: number;
+  decks: { id: string; module: string; name: string; total: number; due: number; fresh: number; solid: number }[];
+  quiz: null | { label: string; index: number; total: number; right: number; question: string; last?: { q: string; a: string; given: string; grade: 'right' | 'close' | 'wrong' } };
+};
 export type Timer = { id: string; label: string; endsAt: number; total: number };
 export type ChatMsg = { id: string; role: 'user' | 'assistant'; text: string; at: number; tools?: ToolUse[]; device?: string; timing?: Timing };
 /** How long each stage of a reply took, in milliseconds (shown in the log, for tuning). */
@@ -71,12 +77,14 @@ export type Settings = {
   /** Which Home Assistant devices appear on the Home card. Empty shows the first few lights, switches and scenes. */
   haEntities: string[];
   mailAccounts: MailAccount[];
+  /** Where revision material lives: a public GitHub repository ("owner/name") or a folder on this computer. */
+  studySource: string;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
   userName: '', address: 'name', assistantName: 'Jarvis', place: '', units: 'c', voice: 'bm_george', speed: 1.05, speak: true, wake: false,
   accent: 'arc', asrModel: 'whisper-base', llmModel: 'qwen-4b', calendarUrls: [], useAppleCalendar: true, useAppleMail: true, musicApp: 'Spotify',
-  homeShortcuts: [], currency: '£', onboarded: false, briefingHour: 8, focusGoal: 120, hotkey: 'Alt+Space', useHark: true, haUrl: '', haEntities: [], mailAccounts: [],
+  homeShortcuts: [], currency: '£', onboarded: false, briefingHour: 8, focusGoal: 120, hotkey: 'Alt+Space', useHark: true, haUrl: '', haEntities: [], mailAccounts: [], studySource: 'Joshbot5000/Law-Conversion-Course',
 };
 
 export type ModelInfo = { id: string; kind: 'asr' | 'llm' | 'voice' | 'support'; name: string; blurb: string; bytes: number; installed: boolean; recommended?: boolean };
@@ -97,6 +105,7 @@ export type Snapshot = {
   countdowns: Countdown[];
   routines: Routine[];
   recordings: Recording[];
+  study: StudyView;
   chat: ChatMsg[];
   events: CalEvent[];
   mail: Mail[];

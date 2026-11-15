@@ -24,6 +24,7 @@ no subscription, no usage limits, and nothing you say is uploaded.
 | **Look things up** | Web search and Wikipedia when he needs a fact |
 | **What needs you** | A live shortlist: overdue tasks, the next meeting, unread mail, a bill due, rain on the way |
 | **Systems** | CPU, memory and battery gauges, and the state of his own mind, ears and voice |
+| **Revision** | Point Jarvis at a study repository (flashcards as `Question,Answer` CSV files, notes in Markdown; a public GitHub repo or a folder). “Quiz me on contract”: he asks each card aloud, marks your spoken answer, reads the model answer when you miss, and brings missed cards back sooner (spaced repetition). Law questions are answered from your own notes, and he says so when the notes don't cover something. Quiz time counts as focus time |
 | **Focus sessions** | “Start a 45 minute focus session on contract law.” He times it, tells you when it's up and logs it: today, the last seven days, time per subject, and a daily streak against your goal |
 | **Habits** | “Add a habit called reading”, then “I did my reading”. Seven-day dots and streaks; a nudge in the evening for anything left |
 | **Countdowns** | “Count down to my tort exam on 12 January.” “How many days until my exam?” Close ones appear in the briefing and in What needs you |

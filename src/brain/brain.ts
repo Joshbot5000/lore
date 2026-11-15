@@ -17,6 +17,8 @@ import { dayKey, daysUntil, doneToday, focusStats, inDays, isFocusStop, matchCou
 import { aboutRecordings, defaultHarkDir, harkContext, namesRecording, readHark, type HarkRec } from './hark';
 import { HomeAssistant, isOn, matchEntities, parseHomeCommand, tapService, type HaEntity } from './ha';
 import { MAIL_PRESETS, fetchUnread } from './imap';
+import fs from 'node:fs';
+import { contentWords, deckStats, fetchRepo, grade, isDue, isRepo, looksLegal, matchDecks, pickCards, readFolder, record, studyContext, vocabulary, type Card, type Library } from './study';
 import { uid } from '../shared/types';
 import type { Focus, FocusNow, Habit, Recording, Routine } from '../shared/types';
 import type { CalEvent, ChatMsg, EngineStatus, HomeAction, Integrations, Mail, Memory, Need, NowPlaying, Push, Settings, Snapshot, Task, Timer, ToolUse, Vitals, Weather } from '../shared/types';
@@ -97,6 +99,10 @@ export class Brain extends EventEmitter {
     weather: { state: 'setup' }, calendar: { state: 'off' }, mail: { state: 'off' }, music: { state: 'off' }, home: { state: 'off' }, system: { state: 'ok' }, hark: { state: 'off' },
   };
   private focusNow: FocusNow | null = null;
+  private library: Library = { decks: [], notes: [], syncedAt: 0, source: '' };
+  private vocab = new Set<string>();
+  private studyError = '';
+  private quiz: { label: string; cards: Card[]; i: number; right: number; missed: Card[]; startedAt: number; last?: { q: string; a: string; given: string; grade: 'right' | 'close' | 'wrong'; key: string } } | null = null;
   private shortcutTiles: HomeAction[] = [];
   private haEntities: HaEntity[] = [];
   private haProblem = '';
@@ -166,6 +172,8 @@ export class Brain extends EventEmitter {
     every(5e3, () => this.refreshVitals());
     every(120e3, () => this.refreshHark());
     every(15e3, () => this.refreshHa());
+    this.loadLibrary();
+    every(30 * 60e3, () => this.syncStudy());
     every(1e3, () => this.tick());
   }
 
@@ -577,6 +585,129 @@ export class Brain extends EventEmitter {
     return `${evs.length === 1 ? 'One thing' : `${evs.length} things`} ${day}: ${evs.slice(0, 5).map((e) => `${e.title}${e.allDay ? '' : ` at ${at(e.start)}`}`).join(', ')}.`;
   }
 
+  // ------------------------------------------------------------------ revision
+
+  private get libraryFile(): string {
+    return path.join(this.o.dataDir, 'study-library.json');
+  }
+
+  private loadLibrary(): void {
+    try {
+      this.library = JSON.parse(fs.readFileSync(this.libraryFile, 'utf8')) as Library;
+      this.vocab = vocabulary(this.library);
+    } catch {
+      /* nothing synced yet */
+    }
+  }
+
+  /** Bring in the latest flashcards and notes. Kept on disk, so revision works offline afterwards. */
+  async syncStudy(force = false): Promise<void> {
+    const source = this.settings.studySource.trim();
+    if (!source) {
+      this.library = { decks: [], notes: [], syncedAt: 0, source: '' };
+      this.vocab = new Set();
+      this.studyError = '';
+      return this.patch({ study: this.studyView(), needs: this.needs() });
+    }
+    if (!force && this.library.source === source && Date.now() - this.library.syncedAt < 6 * 36e5) return;
+    try {
+      const got = isRepo(source) ? await fetchRepo(this.o.fetch, source) : fs.existsSync(source) ? readFolder(source) : null;
+      if (!got) throw new Error('that is neither a GitHub repository (owner/name) nor a folder on this Mac');
+      if (!got.decks.length && !got.notes.length) throw new Error('no flashcards or notes were found there (looking for flashcards/*.csv and notes/**/*.md)');
+      this.library = { ...got, syncedAt: Date.now(), source };
+      this.vocab = vocabulary(this.library);
+      this.studyError = '';
+      fs.writeFileSync(this.libraryFile, JSON.stringify(this.library));
+    } catch (err) {
+      const msg = (err as Error).message;
+      this.studyError = /fetch failed|ENOTFOUND|network|ERR_/i.test(msg) ? "can't reach GitHub (offline?)" : msg;
+    }
+    this.patch({ study: this.studyView(), needs: this.needs() });
+  }
+
+  private studyView(): Snapshot['study'] {
+    const progress = this.store.get('study');
+    const decks = deckStats(this.library.decks, progress);
+    const q = this.quiz;
+    return {
+      source: this.settings.studySource, syncedAt: this.library.syncedAt, error: this.studyError || undefined,
+      due: decks.reduce((n, d) => n + d.due, 0), cards: decks.reduce((n, d) => n + d.total, 0), notes: this.library.notes.length, decks,
+      quiz: q ? { label: q.label, index: q.i, total: q.cards.length, right: q.right, question: q.cards[q.i]?.q ?? '', last: q.last && { q: q.last.q, a: q.last.a, given: q.last.given, grade: q.last.grade } } : null,
+    };
+  }
+
+  /** Begin a flashcard session. Returns what to say. */
+  startQuiz(said = ''): string {
+    if (!this.library.decks.length) return this.studyError ? `I couldn't load your flashcards: ${this.studyError}.` : 'I have no flashcards yet. Set where your revision material lives in Settings.';
+    const decks = matchDecks(this.library.decks, said);
+    if (!decks.length) return `I don't have a deck on that. I have ${[...new Set(this.library.decks.map((d) => d.module))].join(', ')}.`;
+    const cards = pickCards(decks, this.store.get('study'), 10);
+    const modules = [...new Set(decks.map((d) => d.module))];
+    const label = decks.length === 1 ? decks[0].name : modules.length === 1 ? modules[0].replace(/^./, (c) => c.toUpperCase()) : 'Mixed revision';
+    this.quiz = { label, cards, i: 0, right: 0, missed: [], startedAt: Date.now(), last: undefined };
+    this.patch({ study: this.studyView() });
+    return `${label}: ${cards.length === 1 ? 'one card' : `${cards.length} cards`}. Say skip if you don't know one, or stop to finish. First question. ${cards[0].q}`;
+  }
+
+  private endQuiz(): string {
+    const q = this.quiz;
+    if (!q) return 'No quiz is running.';
+    this.quiz = null;
+    const done = q.i;
+    const mins = Math.round((Date.now() - q.startedAt) / 6e4);
+    if (mins >= 1) {
+      // Revision counts as focused work.
+      this.store.get('focus').push({ id: uid(), subject: q.label, start: q.startedAt, minutes: mins });
+      this.store.touch('focus');
+    }
+    this.patch({ study: this.studyView(), focus: this.recentFocus(), needs: this.needs() });
+    if (!done) return 'Quiz stopped.';
+    const missed = [...new Set(q.missed.map((c) => c.q.replace(/\?$/, '')))];
+    return `That's ${q.right} out of ${done}.${missed.length ? ` To go over again: ${missed.slice(0, 3).join('; ')}${missed.length > 3 ? `; and ${missed.length - 3} more` : ''}. I'll bring ${missed.length === 1 ? 'it' : 'them'} back soon.` : ' Every one right.'}`;
+  }
+
+  /** One turn while a quiz is running: an answer or a control word. Null means "this was not for the quiz". */
+  private quizTurn(text: string): string | null {
+    const q = this.quiz;
+    if (!q) return null;
+    const t = text.toLowerCase().replace(/[.!?,]/g, '').replace(new RegExp(`^(hey |ok |okay )?${this.settings.assistantName.toLowerCase()}\\s*`), '').trim();
+    const progress = this.store.get('study');
+    const card = q.cards[q.i];
+    const next = (lead: string): string => {
+      q.i++;
+      this.store.touch('study');
+      if (q.i >= q.cards.length) return `${lead} ${this.endQuiz()}`.trim();
+      this.patch({ study: this.studyView() });
+      return `${lead} Next. ${q.cards[q.i].q}`.trim();
+    };
+    if (/^(stop|end|finish|quit|exit|cancel)( the| this)?( quiz| flashcards| revision| test)?( now| please)?$|^thats enough( for now)?$|^(im|i am) done$/.test(t.replace(/'/g, ''))) return this.endQuiz();
+    if (/^(repeat|again|say (that|it) again|repeat (that|the question)|what was the question|pardon|sorry)$/.test(t)) return card.q;
+    if (/^(i (was|got (it|that)) right|i got it|mark (it|that)( as)? (right|correct)|that was right|(that|it) counts)$/.test(t) && q.last && q.last.grade !== 'right') {
+      // The checker is rough: the person has the last word.
+      record(progress, q.last.key, true);
+      q.last.grade = 'right';
+      q.right++;
+      q.missed = q.missed.filter((c) => c.key !== q.last!.key);
+      this.store.touch('study');
+      this.patch({ study: this.studyView() });
+      return `Marked right. ${card.q}`;
+    }
+    const skip = /^(skip|pass|next|i dont know|dont know|no idea|not sure|i have no idea|i cant remember|cant remember|show (me )?(the )?answer|tell me|what is it|i forget|ive forgotten)$/.test(t.replace(/'/g, ''));
+    // Anything that reads as an instruction or a question to Jarvis is not an answer.
+    if (!skip && (wantsAction(text) || /^(what|whats|who|when|where|why|how|can you|could you|will you|do i|is there|are there)\b/.test(t.replace(/'/g, '')) && /\?\s*$/.test(text.trim()) && contentWords(text).length < 4)) return null;
+    const g = skip ? 'wrong' : grade(text, card.a);
+    record(progress, card.key, g === 'right');
+    if (g === 'right') q.right++;
+    else q.missed.push(card);
+    q.last = { q: card.q, a: card.a, given: skip ? '' : text, grade: g, key: card.key };
+    return next(g === 'right' ? ['Right.', 'Correct.', 'Yes.', 'Spot on.'][q.i % 4] : g === 'close' ? `Close. ${card.a}` : skip ? card.a : `Not quite. ${card.a}`);
+  }
+
+  /** Is this question about the subject being studied? */
+  private aboutStudy(q: string): boolean {
+    return this.vocab.size > 0 && (studyContext(this.library, this.vocab, q) !== '' || looksLegal(q));
+  }
+
   private batteryAt = 0;
   async refreshVitals(): Promise<void> {
     const now = os.cpus().map((c) => c.times);
@@ -659,6 +790,8 @@ export class Brain extends EventEmitter {
     const bill = this.store.get('money').find((m) => m.kind === 'bill' && m.every === 'month' && m.day && m.day - dom >= 0 && m.day - dom <= 2);
     if (bill) out.push({ id: 'bill', tone: 'warn', text: `${bill.name} (${s.currency}${bill.amount}) is due ${bill.day === dom ? 'today' : `in ${bill.day! - dom} day${bill.day! - dom === 1 ? '' : 's'}`}` });
     for (const c of this.store.get('countdowns').filter((x) => daysUntil(x.date) >= 0 && daysUntil(x.date) <= 7).sort((a, b) => a.date - b.date).slice(0, 2)) out.push({ id: `cd-${c.id}`, tone: daysUntil(c.date) <= 2 ? 'warn' : 'info', text: `${c.title} is ${inDays(daysUntil(c.date))}` });
+    const dueCards = this.library.decks.reduce((n, d) => n + d.cards.filter((c) => this.store.get('study')[c.key] && isDue(this.store.get('study'), c.key)).length, 0);
+    if (dueCards) out.push({ id: 'study', tone: 'info', text: `${dueCards} flashcard${dueCards === 1 ? '' : 's'} due for revision` });
     const habitsLeft = this.store.get('habits').filter((h) => !doneToday(h));
     if (habitsLeft.length && new Date().getHours() >= 17) out.push({ id: 'habits', tone: 'info', text: habitsLeft.length === 1 ? `Habit left today: ${habitsLeft[0].name}` : `${habitsLeft.length} habits left today` });
     const fromRecordings = this.recordings.filter((r) => now - r.at < 14 * 864e5).reduce((n, r) => n + r.actions.filter((a) => !a.done).length, 0);
@@ -666,14 +799,14 @@ export class Brain extends EventEmitter {
     if (this.weather?.days[0] && this.weather.days[0].rain >= 70) out.push({ id: 'rain', tone: 'info', text: `Rain likely today (${this.weather.days[0].rain}%)` });
     for (const [k, v] of Object.entries(this.integrations)) if (v.state === 'error') out.push({ id: `int-${k}`, tone: 'warn', text: `${k[0].toUpperCase() + k.slice(1)}: ${v.detail ?? 'not responding'}`, action: { view: 'settings' } });
     if (!s.place) out.push({ id: 'place', tone: 'info', text: 'Tell me your town for local weather', action: { view: 'settings' } });
-    return out.slice(0, 7);
+    return out.slice(0, 8);
   }
 
   snapshot(lan: string[] = []): Snapshot {
     return {
       settings: this.settings, tasks: this.store.get('tasks'), notes: this.store.get('notes'), money: this.store.get('money'),
       memories: this.store.get('memories').map(({ v: _v, ...m }) => m), timers: this.timers,
-      focus: this.recentFocus(), focusNow: this.focusNow, habits: this.store.get('habits'), countdowns: this.store.get('countdowns'), routines: this.store.get('routines'), recordings: this.recordingList(), chat: this.store.get('chat').slice(-60),
+      focus: this.recentFocus(), focusNow: this.focusNow, habits: this.store.get('habits'), countdowns: this.store.get('countdowns'), routines: this.store.get('routines'), recordings: this.recordingList(), study: this.studyView(), chat: this.store.get('chat').slice(-60),
       events: this.events, mail: this.mail, unread: this.unread, music: this.music, weather: this.weather, vitals: this.vitals, home: this.home,
       integrations: this.integrations, models: this.models.list(this.ramGb), downloads: this.models.downloads(), status: { ...this.status },
       needs: this.needs(), mac: this.o.mac.real, version: this.o.version, links: { lan, token: this.store.get('meta').token, port: this.o.port },
@@ -695,6 +828,7 @@ export class Brain extends EventEmitter {
     if (patch.useHark !== undefined) this.refreshHark();
     if (patch.haUrl !== undefined || patch.haEntities !== undefined) void this.refreshHa();
     if (patch.mailAccounts !== undefined) void this.refreshMail();
+    if (patch.studySource !== undefined) void this.syncStudy(true);
     if (patch.asrModel !== undefined && patch.asrModel !== before.asrModel) void this.ensureAsr().catch(() => undefined);
     if (patch.llmModel !== undefined && patch.llmModel !== before.llmModel) {
       this.llmLoaded = '';
@@ -957,6 +1091,9 @@ export class Brain extends EventEmitter {
     if (habits.length) L.push(`Daily habits: ${habits.map((h) => `${h.name} (${doneToday(h) ? 'done today' : 'not done yet today'}, ${streak(h.days)}-day streak)`).join('; ')}.`);
     const cds = this.store.get('countdowns').filter((c) => daysUntil(c.date) >= 0).sort((a, b) => a.date - b.date).slice(0, 6);
     if (cds.length) L.push(`Countdowns: ${cds.map((c) => `${c.title} ${inDays(daysUntil(c.date))} (${new Date(c.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long' })})`).join('; ')}.`);
+    const revision = this.vocab.size ? studyContext(this.library, this.vocab, query) : '';
+    if (revision) L.push(`From ${s.userName || 'the user'}'s own revision notes and flashcards (answer from these; if they don't cover the point, say the notes don't cover it rather than guessing):\n${revision}`);
+    else if (this.vocab.size && looksLegal(query)) L.push(`Revision notes: nothing on this in ${s.userName || 'the user'}'s notes. The user has already been told so; answer in one sentence from general knowledge.`);
     if (this.aboutHark(query)) L.push(harkContext(this.harkDir, this.recordings, query));
     if (/\b(clipboard|copied|pasted)\b/i.test(query)) {
       // The clipboard is only ever read when the user brings it up.
@@ -991,6 +1128,18 @@ Each request comes with a <context> block. It is your live view of their world: 
     };
     const c = t.replace(/^(please |can you |could you |will you |would you )+/, '').replace(/ please$/, '').trim();
     const did = (name: string, label: string): ToolUse => ({ name, label, ok: true });
+
+    // ---- revision: a quiz in progress takes the turn, unless this was plainly meant for something else
+    const quizReply = this.quizTurn(text);
+    if (quizReply !== null) return { reply: quizReply };
+    const quiz = c.match(/^(?:quiz|test|examine|grill) me(?: on (.+))?$/) ?? c.match(/^(?:start|do|run|begin|lets do|lets have|give me)(?: a| an| some| my)? (?:quiz|flashcards?|flash cards?|revision quiz|test)(?: on (.+))?$/) ?? c.match(/^(?:flashcards?|flash cards?)(?: on (.+))?$/);
+    if (quiz) return { reply: this.startQuiz(quiz[1] ?? '') };
+    if (/^(how many (flash ?)?cards (are|do i have) due|whats due for revision|what do i need to revise|how is my revision going|revision (status|progress))$/.test(c.replace(/'/g, ''))) {
+      const v = this.studyView();
+      if (!v.cards) return { reply: 'I have no flashcards loaded yet.' };
+      const weakest = [...v.decks].sort((a, b) => a.solid / a.total - b.solid / b.total)[0];
+      return { reply: `${v.due ? `${v.due} card${v.due === 1 ? ' is' : 's are'} due` : 'Nothing is due'}, and ${v.decks.reduce((n, d) => n + d.fresh, 0)} you haven't seen yet. ${v.decks.reduce((n, d) => n + d.solid, 0)} of ${v.cards} are solid${weakest && weakest.solid < weakest.total ? `; ${weakest.name.toLowerCase()} needs the most work` : ''}.` };
+    }
 
     // ---- focus sessions
     if (isFocusStop(c)) return this.focusNow ? { reply: this.endFocus(), tool: did('focus', 'Focus session ended') } : { reply: 'No focus session is running.' };
@@ -1256,8 +1405,9 @@ Each request comes with a <context> block. It is your live view of their world: 
     const uses: ToolUse[] = [];
     try {
       // "Turn the volume down and open Safari" is two requests: handle each on its own, so neither is dropped.
-      const routine = this.matchRoutine(text);
-      for (const part of routine ? routine.steps : splitCommands(text)) {
+      const routine = this.quiz ? undefined : this.matchRoutine(text);
+      // While a quiz is running the whole message is one answer, even if it contains "and".
+      for (const part of this.quiz ? [text] : routine ? routine.steps : splitCommands(text)) {
         if (this.activeTurn !== turn) break;
         const lead = reply ? ' ' : '';
         const piece = await this.answer(turn, part, history, uses, speak, lead);
@@ -1296,7 +1446,7 @@ Each request comes with a <context> block. It is your live view of their world: 
     await this.ensureLlm();
     // Only hand over the web-search tool when the question is about the outside world. Small models
     // otherwise reach for it on personal questions that the context already answers.
-    const outward = /\b(search|look up|google|find out|news|latest|headline|who (is|was|were|won|invented|wrote)|what (is|are|was|were) (the|a|an)\b|when (is|was|did|does)|where (is|are|was)|how (many|much|far|old|tall|long|do|does|did)|price of|score|define|meaning of|capital of)\b/i.test(text) && !/\b(my|mine|me|i|i'm|i've|we|our)\b/i.test(text) && !this.aboutHark(text) && !/\b(clipboard|copied|pasted)\b/i.test(text);
+    const outward = /\b(search|look up|google|find out|news|latest|headline|who (is|was|were|won|invented|wrote)|what (is|are|was|were) (the|a|an)\b|when (is|was|did|does)|where (is|are|was)|how (many|much|far|old|tall|long|do|does|did)|price of|score|define|meaning of|capital of)\b/i.test(text) && !/\b(my|mine|me|i|i'm|i've|we|our)\b/i.test(text) && !this.aboutHark(text) && !this.aboutStudy(text) && !/\b(clipboard|copied|pasted)\b/i.test(text);
     // Questions and chat get no action tools at all, so answering can never have side effects;
     // only a request to do something unlocks them.
     const acting = wantsAction(text);
@@ -1305,6 +1455,16 @@ Each request comes with a <context> block. It is your live view of their world: 
     let pending = '';
     let first = true;
     let spoke = false;
+    // A law question the notes can't answer: say where the answer is coming from before giving it.
+    // (Said by Jarvis himself, not left to the model, so it is never skipped.)
+    if (this.vocab.size && looksLegal(text) && !studyContext(this.library, this.vocab, text)) {
+      const caveat = "That isn't in your notes, so this is from my own memory and needs checking.";
+      reply = caveat + ' ';
+      this.mark(turn, 'think');
+      this.push({ type: 'say', turn, delta: lead + reply, state: 'speaking' });
+      first = false;
+      if (speak) (void this.speakOut(turn, caveat), (spoke = true));
+    }
     const before = uses.length;
     const onChunk = (c: { streamId: string; delta: string }) => {
       if (c.streamId !== turn || this.activeTurn !== turn) return;
@@ -1397,6 +1557,8 @@ Each request comes with a <context> block. It is your live view of their world: 
     if (bill) P.push(`${bill.text}.`);
     for (const c of this.store.get('countdowns').filter((x) => daysUntil(x.date) >= 0 && daysUntil(x.date) <= 14).sort((a, b) => a.date - b.date).slice(0, 2)) P.push(`${c.title} is ${inDays(daysUntil(c.date))}.`);
     const habits = this.store.get('habits');
+    const dueNow = this.studyView().due;
+    if (dueNow) P.push(`${dueNow} flashcard${dueNow === 1 ? ' is' : 's are'} due for revision.`);
     const alive = habits.filter((x) => streak(x.days) >= 2 && !doneToday(x));
     if (alive.length) P.push(`Keep ${alive.length === 1 ? `your ${alive[0].name.toLowerCase()} streak` : `${alive.length} habit streaks`} going today.`);
     else if (habits.length) P.push(`${habits.length} habit${habits.length === 1 ? '' : 's'} to tick off today.`);
@@ -1523,6 +1685,11 @@ Each request comes with a <context> block. It is your live view of their world: 
       delete mail[p.id];
       this.store.set('secrets', { ...this.store.get('secrets'), mail });
       this.patchSettings({ mailAccounts: this.settings.mailAccounts.filter((a) => a.id !== p.id) });
+    },
+    startQuiz: (p: { deck?: string; device?: string }) => void this.say(p.deck ? `Quiz me on ${p.deck}` : 'Quiz me', p),
+    syncStudy: async () => {
+      await this.syncStudy(true);
+      return { ok: !this.studyError, error: this.studyError || undefined, cards: this.studyView().cards, notes: this.library.notes.length };
     },
     startFocus: (p: { minutes: number; subject?: string }) => void this.startFocus(p.minutes, p.subject ?? ''),
     stopFocus: () => this.endFocus(),

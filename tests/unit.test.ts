@@ -243,3 +243,64 @@ describe('music requests', () => {
     expect(spotifyUri([hits[2]], null)).toBeNull();
   });
 });
+
+import { coverage, deckStats, grade, matchDecks, parseCsv, parseDeck, parseNotes, pickCards, record, studyContext, vocabulary, type Progress } from '../src/brain/study';
+describe('revision', () => {
+  const csv = 'Question,Answer\nWhat is an offer?,"A definite statement of the terms on which the offeror is willing to be bound, made with the intention that it becomes binding as soon as it is accepted."\nWhat happened in Hyde v Wrench (1840)?,"Wrench offered his farm for £1,000; Hyde offered £950, then tried to accept the original offer. The counter-offer had destroyed it, so there was no contract."\n"Say ""hello""",plain\n';
+  const deck = parseDeck('flashcards/contract-agreement.csv', csv)!;
+  const tort = parseDeck('flashcards/tort-negligence-core.csv', 'Question,Answer\nWhat four things must a claimant prove to win in negligence?,"A duty of care, a breach of that duty, causation and damage that is not too remote."\n')!;
+  it('reads flashcard files', () => {
+    expect(parseCsv('a,"b,c"\r\n"d ""e""",f\n')).toEqual([['a', 'b,c'], ['d "e"', 'f']]);
+    expect(deck).toMatchObject({ id: 'contract-agreement', module: 'contract', name: 'Contract agreement' });
+    expect(deck.cards).toHaveLength(3);
+    expect(deck.cards[2]).toMatchObject({ q: 'Say "hello"', a: 'plain' });
+    expect(deck.cards[0].key).toBe(parseDeck('x/contract-agreement.csv', csv)!.cards[0].key);
+  });
+  it('marks spoken answers by substance, not wording', () => {
+    const a = deck.cards[0].a;
+    expect(grade("it's a definite statement of terms that the offeror intends to be bound by once it's accepted", a)).toBe('right');
+    expect(grade('a statement of terms someone is willing to be bound by', a)).not.toBe('wrong');
+    expect(grade('an invitation for other people to negotiate', a)).toBe('wrong');
+    expect(grade('', a)).toBe('wrong');
+    expect(grade('duty, breach, causation, and the damage must not be too remote', tort.cards[0].a)).toBe('right');
+    expect(grade('duty and breach', tort.cards[0].a)).toBe('close');
+    const fisher = "A shopkeeper displayed a flick knife in his window and was charged with 'offering for sale' a prohibited weapon. The display was only an invitation to treat, not an offer, so he was not guilty.";
+    expect(grade('The shopkeeper was found guilty because the knife was on sale', fisher)).toBe('wrong');
+    expect(grade("the shopkeeper displayed a flick knife, the display was an invitation to treat and not an offer so he wasn't guilty", fisher)).toBe('right');
+    expect(grade('He left the crossing gate open and someone died, so he was not guilty of manslaughter', 'A railway gatekeeper left the level-crossing gate open and a person was killed. His contractual duty created a duty to the public, so he was guilty of manslaughter by omission.')).toBe('wrong');
+    expect(coverage('the counter offer destroyed the original offer so no contract', deck.cards[1].a)).toBeGreaterThan(0.4);
+  });
+  it('spaces cards out and brings missed ones back', () => {
+    const p: Progress = {};
+    const now = 1_000_000_000_000;
+    record(p, 'a', true, now);
+    expect(p.a).toMatchObject({ box: 1, seen: 1, right: 1 });
+    expect(p.a.due - now).toBe(864e5);
+    record(p, 'a', true, now);
+    expect(p.a.due - now).toBe(3 * 864e5);
+    record(p, 'a', false, now);
+    expect(p.a).toMatchObject({ box: 0, seen: 3, right: 2 });
+    expect(p.a.due - now).toBe(600000);
+    const prog: Progress = { [deck.cards[0].key]: { box: 3, due: now + 5 * 864e5, seen: 3, right: 3 }, [deck.cards[1].key]: { box: 0, due: now - 1, seen: 1, right: 0 } };
+    expect(pickCards([deck], prog, 10, now).map((c) => c.q)).toEqual([deck.cards[1].q, deck.cards[2].q]);
+    expect(deckStats([deck], prog, now)[0]).toMatchObject({ total: 3, due: 1, fresh: 1, solid: 1 });
+  });
+  it('finds the deck someone asks for', () => {
+    expect(matchDecks([deck, tort], 'contract').map((d) => d.id)).toEqual(['contract-agreement']);
+    expect(matchDecks([deck, tort], 'tort law').map((d) => d.id)).toEqual(['tort-negligence-core']);
+    expect(matchDecks([deck, tort], 'negligence').map((d) => d.id)).toEqual(['tort-negligence-core']);
+    expect(matchDecks([deck, tort], '')).toHaveLength(2);
+    expect(matchDecks([deck, tort], 'land law')).toHaveLength(0);
+  });
+  it('answers law questions from the notes, and only law questions', () => {
+    const notes = parseNotes('notes/contract/ch01-agreement-map.md', '# Chapter 1: Agreement\n\n```mermaid\nflowchart TD\n A-->B\n```\n\n## Ending an offer\n\n**Counter-offer** — a response that changes the terms; it **rejects** the original offer.\n- **Hyde v Wrench (1840)** — Wrench offered his farm for £1,000; Hyde offered £950, which was refused. The counter-offer had destroyed the original offer.\n');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ module: 'contract', title: 'Chapter 1: Agreement: Ending an offer' });
+    expect(notes[0].text).not.toContain('flowchart');
+    const lib = { decks: [deck, tort], notes };
+    const v = vocabulary(lib);
+    expect(studyContext(lib, v, 'What happened in Hyde v Wrench?')).toContain('counter-offer had destroyed');
+    expect(studyContext(lib, v, 'what does a claimant have to prove in negligence')).toContain('duty of care');
+    for (const q of ["what's the weather like", 'remind me to call mum', 'what time is my seminar tomorrow', 'play some jazz', 'how are my habits going']) expect(studyContext(lib, v, q)).toBe('');
+  });
+});

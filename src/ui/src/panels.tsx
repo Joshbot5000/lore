@@ -109,6 +109,8 @@ export function SettingsPanel() {
       <HomeAssistantSettings />
       <MailAccounts />
 
+      <Field label="Revision material" hint="A public GitHub repository (owner/name) or a folder on this Mac holding flashcards/*.csv and notes. I quiz you on the cards and answer law questions from your own notes. Refreshed every few hours."><Text value={s.studySource} onSave={(v) => save({ studySource: v.trim() })} placeholder="owner/repository" /></Field>
+
       <h3>Routines</h3>
       <p className="lead">Say a routine's name and I run its steps in order. Each line is something you could say to me; “briefing” and “evening review” work too.</p>
       <Routines />

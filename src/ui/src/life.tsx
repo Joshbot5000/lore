@@ -1,7 +1,8 @@
 /** Momentum cards: focus sessions, daily habits and countdowns. */
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Flame, Play, Plus, Square, X } from 'lucide-react';
-import { act, useSnap } from './link';
+import { Check, Flame, GraduationCap, Play, Plus, RefreshCw, Square, X } from 'lucide-react';
+import { act, call, toast, useSnap } from './link';
+import { unlock } from './voice';
 import { Card, mmss } from './bits';
 import { dayKey, daysUntil, focusStats, streak } from '../../brain/life';
 
@@ -117,6 +118,50 @@ export function CountdownCard() {
         })}
         {!list.length && !adding && <li className="empty-row">Exams, deadlines, holidays. “Count down to my tort exam on 12 January.”</li>}
       </ul>
+    </Card>
+  );
+}
+
+/** Revision: flashcard decks from the study repository, quizzed by voice or by tapping. */
+export function RevisionCard() {
+  const study = useSnap((s) => s.study);
+  const [answer, setAnswer] = useState('');
+  const q = study.quiz;
+  const say = (text: string) => (unlock(), act('say', { text }));
+  const sync = async () => {
+    const r = await call<{ ok: boolean; error?: string; cards: number; notes: number }>('syncStudy').catch((e: Error) => ({ ok: false, error: e.message, cards: 0, notes: 0 }));
+    toast(r.ok ? `Revision synced: ${r.cards} cards, ${r.notes} note sections` : `Couldn't sync: ${r.error}`, r.ok ? 'info' : 'alert');
+  };
+  return (
+    <Card id="revise" tab="today" label="Revision" right={q ? <span className="label hot">{q.index + 1} of {q.total} · {q.right} right</span> : <button className="ghost label" title={study.syncedAt ? `Synced ${new Date(study.syncedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'Not synced yet'} onClick={() => void sync()}><RefreshCw size={11} /> {study.due ? `${study.due} due` : 'sync'}</button>}>
+      {q ? (
+        <div className="quiz">
+          {q.last && <p className={`quiz-last ${q.last.grade}`}><b>{q.last.grade === 'right' ? 'Right' : q.last.grade === 'close' ? 'Close' : 'Answer'}</b> {q.last.a}</p>}
+          <p className="quiz-q">{q.question}</p>
+          <div className="adder"><input value={answer} placeholder="Say it, or type your answer…" onChange={(e) => setAnswer(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && answer.trim() && (say(answer.trim()), setAnswer(''))} /></div>
+          <div className="quiz-actions">
+            <button className="btn small" onClick={() => say("I don't know")}>Show answer</button>
+            {q.last && q.last.grade !== 'right' && <button className="btn small" onClick={() => say('I got that right')}><Check size={12} /> I was right</button>}
+            <span className="grow" />
+            <button className="btn small danger" onClick={() => say('Stop the quiz')}>Finish</button>
+          </div>
+        </div>
+      ) : study.decks.length ? (
+        <>
+          <ul className="rows decks">
+            {study.decks.slice(0, 6).map((d) => (
+              <li key={d.id}>
+                <span className="grow"><b>{d.name}</b><i>{d.total} cards{d.due ? ` · ${d.due} due` : ''}{d.fresh ? ` · ${d.fresh} new` : ''}</i></span>
+                <span className="deck-bar" title={`${d.solid} of ${d.total} solid`}><i style={{ width: `${(d.solid / d.total) * 100}%` }} /></span>
+                <button className="btn small" onClick={() => (unlock(), act('startQuiz', { deck: d.id }))}><Play size={11} /> Quiz</button>
+              </li>
+            ))}
+          </ul>
+          <div className="quiz-actions"><button className="btn small" onClick={() => (unlock(), act('startQuiz', {}))}><GraduationCap size={13} /> Quiz me on what's due</button><span className="grow" /><span className="label dim">{study.notes} note sections</span></div>
+        </>
+      ) : (
+        <div className="empty"><GraduationCap size={18} /> {study.error ? `Couldn't load your revision material: ${study.error}.` : study.source ? 'Fetching your flashcards and notes…' : 'Point me at your revision repository in Settings and I will quiz you on it.'}</div>
+      )}
     </Card>
   );
 }

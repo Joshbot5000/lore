@@ -4,9 +4,9 @@ import path from 'node:path';
 import { DEFAULT_SETTINGS } from '../shared/types';
 import type { ChatMsg, CalEvent, Countdown, Focus, Habit, Memory, Money, Note, Routine, Settings, Task } from '../shared/types';
 
-type Shape = { settings: Settings; tasks: Task[]; notes: Note[]; money: Money[]; memories: Memory[]; chat: ChatMsg[]; events: CalEvent[]; focus: Focus[]; habits: Habit[]; countdowns: Countdown[]; routines: Routine[]; secrets: { haToken?: string; mail?: Record<string, string> }; meta: { token: string; lastBriefing?: string } };
+type Shape = { settings: Settings; tasks: Task[]; notes: Note[]; money: Money[]; memories: Memory[]; chat: ChatMsg[]; events: CalEvent[]; focus: Focus[]; habits: Habit[]; countdowns: Countdown[]; routines: Routine[]; study: Record<string, { box: number; due: number; seen: number; right: number }>; secrets: { haToken?: string; mail?: Record<string, string> }; meta: { token: string; lastBriefing?: string } };
 
-const FILES: (keyof Shape)[] = ['settings', 'tasks', 'notes', 'money', 'memories', 'chat', 'events', 'focus', 'habits', 'countdowns', 'routines', 'secrets', 'meta'];
+const FILES: (keyof Shape)[] = ['settings', 'tasks', 'notes', 'money', 'memories', 'chat', 'events', 'focus', 'habits', 'countdowns', 'routines', 'study', 'secrets', 'meta'];
 
 export class Store {
   private data: Shape;
@@ -32,6 +32,7 @@ export class Store {
         { id: 'r-night', name: 'Good night', steps: ['pause the music', 'evening review'] },
       ]),
       // Passwords and tokens live in their own file, are never sent to the interface and are left out of exports.
+      study: read('study', {}),
       secrets: read('secrets', {}),
       meta: read('meta', { token: '' }),
     };
