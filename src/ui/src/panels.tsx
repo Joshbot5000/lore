@@ -125,6 +125,10 @@ export function SettingsPanel() {
       <span className="label dim">Voice and memory</span>
       {[...of('voice'), ...of('support')].map((m) => <ModelRow key={m.id} m={m} selected={m.installed} />)}
 
+      <h3>Health check</h3>
+      <p className="lead">If something is slow or not working, run this and send the result: it shows what is connected, how fast each part is running, and any errors.</p>
+      <HealthCheck />
+
       <h3>Your data</h3>
       <p className="lead">Memory, tasks, notes and chat live in one folder on this Mac. Export a copy to back it up or move it to another computer.</p>
       <div className="row">
@@ -211,7 +215,54 @@ function MailAccounts() {
         <button className="btn small" onClick={() => void add()}>Add</button>
       </div>
       <i className={/Couldn't/.test(msg) || (!msg && mail.state === 'error') ? 'bad' : ''}>{msg || (mail.state === 'error' && mail.detail) || MAIL_KINDS.find((k) => k[0] === f.preset)![2]}</i>
+      {f.preset === 'gmail' && (
+        <i>
+          Gmail, step by step: 1. <button className="link-btn" onClick={() => act('openUrl', { url: 'https://myaccount.google.com/signinoptions/twosv' })}>Turn on 2-Step Verification</button> if it isn't already. 2. <button className="link-btn" onClick={() => act('openUrl', { url: 'https://myaccount.google.com/apppasswords' })}>Create an app password</button> (name it Jarvis). 3. Paste the 16 letters Google shows into “App password” above, with your Gmail address, and press Add. Your normal Google password will not work here. If Google says app passwords aren't available for your account, add your Google account under System Settings → Internet Accounts with Mail ticked, open the Mail app once, and keep “Apple Mail” switched on above: I read it from there instead.
+        </i>
+      )}
     </div>
+  );
+}
+
+/** Lifelike voices from ElevenLabs or OpenAI: needs the user's own key; replies are sent there to be spoken. */
+function CloudVoices({ voice, pick }: { voice: string; pick: (id: string) => void }) {
+  type CV = { id: string; name: string; note: string };
+  const [state, setState] = useState<{ eleven: CV[] | null; openai: CV[] | null; error?: string }>({ eleven: null, openai: null });
+  const [provider, setProvider] = useState<'eleven' | 'openai'>('eleven');
+  const [key, setKey] = useState('');
+  const [msg, setMsg] = useState('');
+  const load = () => void call<typeof state>('cloudVoices').then(setState).catch(() => undefined);
+  useEffect(load, []);
+  const saveKey = async (k: string) => {
+    setMsg(k ? 'Checking the key…' : '');
+    try {
+      await call('saveVoiceKey', { provider, key: k });
+      setKey('');
+      setMsg(k ? 'Connected. Tap a voice to hear it.' : 'Removed.');
+      load();
+    } catch (e) {
+      setMsg(`That didn't work: ${(e as Error).message}.`);
+    }
+  };
+  const have = state[provider];
+  const site = provider === 'eleven' ? 'https://elevenlabs.io/app/settings/api-keys' : 'https://platform.openai.com/api-keys';
+  return (
+    <>
+      <span className="label dim">Lifelike cloud voices</span>
+      <p className="lead dim">The most human-sounding option. It needs your own account with the provider, and each reply's words are sent to them to be spoken, so it needs the internet and may cost money beyond any free allowance. Everything else stays on your Mac.</p>
+      <div className="row"><div className="seg">{(['eleven', 'openai'] as const).map((p) => <button key={p} className={provider === p ? 'on' : ''} onClick={() => (setProvider(p), setMsg(''))}>{p === 'eleven' ? 'ElevenLabs' : 'OpenAI'}{state[p] ? ' ✓' : ''}</button>)}</div></div>
+      {have && have.length > 0 && <div className="voices">{have.slice(0, 24).map((v) => <button key={v.id} className={voice === v.id ? 'on' : ''} onClick={() => pick(v.id)}><Play size={12} /> {v.name}{v.note ? ` · ${v.note}` : ''}</button>)}</div>}
+      <div className="field stack">
+        <div className="row">
+          <input className="search" type="password" value={key} placeholder={have ? 'Key saved (paste a new one to replace it)' : provider === 'eleven' ? 'ElevenLabs API key' : 'OpenAI API key'} onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && key.trim() && void saveKey(key)} />
+          <button className="btn small" disabled={!key.trim()} onClick={() => void saveKey(key)}>Connect</button>
+          {have && <button className="btn small danger" onClick={() => void saveKey('')}>Remove</button>}
+        </div>
+        <i className={/didn't work/.test(msg) || state.error ? 'bad' : ''}>{msg || (provider === 'eleven' && state.error) || (provider === 'eleven'
+          ? 'Create a free ElevenLabs account, then make an API key with access to “Text to Speech” and “Voices”. The free plan includes a monthly allowance of speech.'
+          : 'Create a key in your OpenAI account. OpenAI charges a small amount per minute of speech and needs credit on the account.')} <button className="link-btn" onClick={() => act('openUrl', { url: site })}>Open the key page</button></i>
+      </div>
+    </>
   );
 }
 
@@ -228,6 +279,7 @@ function VoicePicker() {
       <div className="voices">
         {VOICES.map(([id, label]) => <button key={id} className={voice === id ? 'on' : ''} onClick={() => pick(id)}><Play size={12} /> {label}</button>)}
       </div>
+      <CloudVoices voice={voice} pick={pick} />
       <span className="label dim">Your Mac's voices</span>
       {good.length > 0 && (
         <div className="voices">
@@ -235,6 +287,25 @@ function VoicePicker() {
         </div>
       )}
       <p className="lead dim">{good.length ? 'More can be added the same way: ' : 'Apple offers free, very natural “Premium” voices that I can speak with. To add one: '}open System Settings → Accessibility → Spoken Content → System Voice → Manage Voices, choose English (UK) or English (US), and download a voice marked Premium (Jamie and Serena are British). Then reopen this panel and it appears here.</p>
+    </>
+  );
+}
+
+function HealthCheck() {
+  const [report, setReport] = useState('');
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true);
+    setReport(await call<string>('diagnose').catch((e: Error) => `The health check itself failed: ${e.message}`));
+    setBusy(false);
+  };
+  return (
+    <>
+      <div className="row">
+        <button className="btn small" disabled={busy} onClick={() => void run()}>{busy ? 'Checking…' : 'Run a health check'}</button>
+        {report && <button className="btn small" onClick={() => void navigator.clipboard.writeText(report).then(() => toast('Copied. Paste it into your message.'), () => toast('Select the text and copy it by hand.', 'alert'))}>Copy the result</button>}
+      </div>
+      {report && <pre className="report">{report}</pre>}
     </>
   );
 }

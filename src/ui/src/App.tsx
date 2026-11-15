@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
-import { Brain, CalendarDays, LayoutGrid, Radio, Settings as Cog, Smartphone, Volume2, VolumeX } from 'lucide-react';
-import { act, isPhone, set, token, useLink, useSnap } from './link';
+import { useState } from 'react';
+import { Brain, CalendarDays, LayoutGrid, Radio, RefreshCw, Settings as Cog, Smartphone, Volume2, VolumeX } from 'lucide-react';
+import { act, call, isPhone, set, toast, token, useLink, useSnap } from './link';
 import { unlock } from './voice';
 import { ClockCard, CoreCard, HomeCard, InboxCard, MoneyCard, MusicCard, NotebookCard, TasksCard, UpcomingCard, VitalsCard, WeatherCard } from './cards';
 import { CountdownCard, FocusCard, HabitsCard, RevisionCard } from './life';
@@ -16,6 +17,12 @@ function TopBar() {
   const memories = useSnap((s) => s.memories.length);
   const online = useLink((s) => s.online);
   const failing = Object.values(integrations).filter((i) => i.state === 'error').length;
+  const [busy, setBusy] = useState(false);
+  const refresh = () => {
+    if (busy) return;
+    setBusy(true);
+    void call('refresh').then(() => toast('Everything is up to date.'), (e: Error) => toast(e.message, 'alert')).finally(() => setBusy(false));
+  };
   return (
     <header className="top">
       <div className="brand"><span className="brand-mark"><i /><i /><i /></span><b>{name.toUpperCase().split('').join(' ')}</b><span className="label dim">life · os</span></div>
@@ -25,6 +32,7 @@ function TopBar() {
       <div className="top-right">
         {!online && <span className="label hot blink">reconnecting</span>}
         {online && failing > 0 && <span className="label hot">{failing} integration{failing > 1 ? 's' : ''} failing</span>}
+        <button className={`chip ${busy ? 'spinning' : ''}`} onClick={refresh} title="Refresh calendar, mail, music and everything else now"><RefreshCw size={14} /></button>
         <button className="chip" onClick={() => set({ panel: 'mind' })} title="What I remember"><Brain size={14} /> {memories}</button>
         <button className={`chip ${speak ? 'on' : ''}`} onClick={() => (unlock(), act('saveSettings', { speak: !speak }))} title={speak ? 'Voice on' : 'Voice off'}>{speak ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>
         {!isPhone && <button className="chip" onClick={() => set({ panel: 'pair' })} title="Pair your phone"><Smartphone size={14} /></button>}

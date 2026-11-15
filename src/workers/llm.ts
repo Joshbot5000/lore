@@ -95,6 +95,9 @@ serve({
               }),
           } as never);
         }
+        const meter = seq.tokenMeter;
+        const in0 = meter?.usedInputTokens ?? 0, out0 = meter?.usedOutputTokens ?? 0, t0 = Date.now();
+        let firstAt = 0;
         const text: string = await session.prompt(p.prompt, {
           maxTokens: p.maxTokens ?? 700,
           temperature: p.temperature ?? 0.4,
@@ -103,8 +106,13 @@ serve({
           ...(p.prefix ? { responsePrefix: p.prefix } : {}),
           signal: abort.signal,
           stopOnAbortSignal: true,
-          onTextChunk: (delta: string) => emit('chunk', { streamId: p.streamId, delta }),
+          onTextChunk: (delta: string) => {
+            firstAt ||= Date.now();
+            emit('chunk', { streamId: p.streamId, delta });
+          },
         });
+        // How much had to be read and written, and how fast: the numbers that explain a slow reply.
+        emit('stats', { streamId: p.streamId, read: (meter?.usedInputTokens ?? 0) - in0, wrote: (meter?.usedOutputTokens ?? 0) - out0, firstMs: (firstAt || Date.now()) - t0, ms: Date.now() - t0 });
         return text.trim();
       } finally {
         aborts.delete(p.streamId);

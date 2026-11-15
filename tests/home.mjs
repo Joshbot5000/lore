@@ -18,7 +18,7 @@ const states = [
   st('sensor.living_room_temperature', '21.3', { friendly_name: 'Living room temperature', device_class: 'temperature', unit_of_measurement: '°C' }),
   st('sensor.power', '120', { friendly_name: 'Power', device_class: 'power' }), st('light.broken', 'unavailable', { friendly_name: 'Broken light' }),
 ];
-const calls = [];
+const calls = []; const cloud = []; let cloudFail = false;
 const web = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname === '/html/') {
@@ -26,6 +26,11 @@ const web = http.createServer((req, res) => {
     const hit = /blinding/i.test(q) ? '<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fopen.spotify.com%2Ftrack%2F0VjIjW4GlUZAMYd2vXMi3b&rut=x">Blinding Lights - song and lyrics by The Weeknd | Spotify</a><a class="result__snippet">Listen</a>' : '';
     return void res.end(`<html><body>${hit}</body></html>`);
   }
+  // ---- stand-in ElevenLabs and OpenAI
+  if (url.pathname === '/v1/voices') return req.headers['xi-api-key'] === 'el-good' ? void res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ voices: [{ voice_id: 'v-rachel', name: 'Rachel', labels: { accent: 'american', gender: 'female' } }, { voice_id: 'v-george', name: 'George - Warm', labels: { accent: 'british', gender: 'male', description: 'warm' } }] })) : void res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }));
+  if (url.pathname.startsWith('/v1/text-to-speech/')) { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { cloud.push({ voice: url.pathname.split('/').pop(), ...JSON.parse(b) }); if (cloudFail) return void res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ detail: { status: 'quota_exceeded', message: 'You have run out of credits' } })); res.writeHead(200, { 'Content-Type': 'audio/mpeg' }).end(`MP3 for: ${JSON.parse(b).text}`); }); return; }
+  if (url.pathname === '/v1/models') return req.headers.authorization === 'Bearer oa-good' ? void res.end('{"data":[]}') : void res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'Incorrect API key provided' } }));
+  if (url.pathname === '/v1/audio/speech') { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { cloud.push(JSON.parse(b)); res.writeHead(200, { 'Content-Type': 'audio/mpeg' }).end(`MP3 for: ${JSON.parse(b).input}`); }); return; }
   if (req.headers.authorization !== `Bearer ${TOKEN}`) return void res.writeHead(401).end('{}');
   if (url.pathname === '/api/states') return void res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(states));
   const svc = url.pathname.match(/^\/api\/services\/(\w+)\/(\w+)$/);
@@ -63,7 +68,7 @@ const imap = net.createServer((sock) => {
 await new Promise((r) => imap.listen(0, '127.0.0.1', r));
 
 const port = 8000 + Math.floor(Math.random() * 90);
-const child = spawn('node', ['out/main/headless.js'], { env: { ...process.env, JARVIS_FAKE_MAC: '1', JARVIS_DATA_DIR: data, JARVIS_HARK_DIR: path.join(data, 'none'), JARVIS_PORT: String(port), JARVIS_SEARCH_URL: `${HA}/html/` }, stdio: ['ignore', 'pipe', 'inherit'] });
+const child = spawn('node', ['out/main/headless.js'], { env: { ...process.env, JARVIS_FAKE_MAC: '1', JARVIS_DATA_DIR: data, JARVIS_HARK_DIR: path.join(data, 'none'), JARVIS_PORT: String(port), JARVIS_SEARCH_URL: `${HA}/html/`, JARVIS_ELEVEN_URL: HA, JARVIS_OPENAI_URL: HA }, stdio: ['ignore', 'pipe', 'inherit'] });
 const url = await new Promise((r) => child.stdout.on('data', (d) => { const m = String(d).match(/http:\/\/localhost:\d+\/\?k=\w+/); if (m) r(new URL(m[0])); }));
 const ws = new WebSocket(`ws://${url.host}/ws?k=${url.searchParams.get('k')}&d=test`);
 let snap = null, id = 1, cur = null; const waits = new Map(); const audio = []; const timings = [];
@@ -71,6 +76,7 @@ ws.on('message', (raw) => {
   const p = JSON.parse(String(raw));
   if (p.id !== undefined && waits.has(p.id)) return void (waits.get(p.id)(p), waits.delete(p.id));
   if (p.type === 'snapshot') snap = p.data; else if (p.type === 'patch') Object.assign(snap, p.data);
+  else if (p.type === 'audio' && p.wav && p.wav.startsWith('mp3:')) audio.push({ at: Date.now(), gap: p.gap, text: p.text, mp3: Buffer.from(p.wav.slice(4), 'base64').toString(), secs: 0, pcm: Buffer.alloc(0) });
   else if (p.type === 'audio' && p.wav) audio.push({ at: Date.now(), gap: p.gap, text: p.text, secs: (Buffer.from(p.wav.slice(p.wav.indexOf(':') + 1), 'base64').length / 2) / +p.wav.slice(0, p.wav.indexOf(':')), pcm: Buffer.from(p.wav.slice(p.wav.indexOf(':') + 1), 'base64') });
   else if (p.type === 'say' && p.timing) timings.push(p.timing);
   else if (p.type === 'say' && cur) { if (p.delta) cur.text += p.delta; if (p.tool) cur.tools.push(p.tool); if (p.timing) cur.timing = p.timing; if (p.done) cur.done(); }
@@ -161,6 +167,38 @@ try {
   audio.length = 0; await call('saveSettings', { voice: 'bm_george' }); await say('what time is it'); await hush();
   const plain = audio[0]?.pcm; let diff = 0; for (let i = 0; i < Math.min(blend.length, plain.length) - 1; i += 2) diff += Math.abs(blend.readInt16LE(i) - plain.readInt16LE(i));
   check('a blended voice really is a different voice', blend && plain && diff / (Math.min(blend.length, plain.length) / 2) > 300, `average difference ${(diff / (Math.min(blend.length, plain.length) / 2)).toFixed(0)}`);
+  // ---------------- cloud voices
+  let cr = await call('saveVoiceKey', { provider: 'eleven', key: 'el-bad' });
+  check('a wrong cloud voice key is refused, with a reason', /ElevenLabs rejected the key/.test(cr.error ?? ''), cr.error);
+  cr = await call('saveVoiceKey', { provider: 'eleven', key: 'el-good' });
+  const cv = (await call('cloudVoices')).result;
+  check('ElevenLabs voices are listed, British first', cr.result?.ok && cv.eleven?.[0]?.id === 'eleven:v-george' && cv.eleven[0].name === 'George' && cv.openai === null, JSON.stringify(cv.eleven));
+  audio.length = 0; await call('saveSettings', { voice: 'eleven:v-george' }); await say('what time is it'); await hush(1500);
+  check('replies are spoken with the cloud voice', audio.length === 1 && /^MP3 for: It's \d/.test(audio[0].mp3) && cloud[cloud.length - 1].voice === 'v-george' && cloud[cloud.length - 1].model_id === 'eleven_flash_v2_5', audio[0]?.mp3);
+  cloudFail = true; audio.length = 0; await say('what time is it'); await hush(3500); cloudFail = false;
+  check('if the cloud voice fails, the built-in voice takes over', audio.length === 1 && !audio[0].mp3 && audio[0].secs > 0.5);
+  cr = await call('saveVoiceKey', { provider: 'openai', key: 'oa-good' });
+  audio.length = 0; await call('saveSettings', { voice: 'openai:fable' }); await say('what time is it'); await hush(1500);
+  check('OpenAI voices work too', cr.result?.ok && audio.length === 1 && /^MP3 for/.test(audio[0].mp3) && cloud[cloud.length - 1].voice === 'fable' && /British/.test(cloud[cloud.length - 1].instructions));
+  await new Promise((r2) => setTimeout(r2, 400));
+  check('cloud keys are kept out of settings and the dashboard', !/el-good|oa-good/.test(fs.readFileSync(path.join(data, 'settings.json'), 'utf8') + JSON.stringify(snap)) && /el-good/.test(fs.readFileSync(path.join(data, 'secrets.json'), 'utf8')));
+  await call('saveSettings', { voice: 'bm_george*0.55+bm_fable*0.45' });
+  // ---------------- everyday commands, without the language model
+  const fastCmd = async (text, re, name) => ask(text, (x) => re.test(x.text) && x.ms < 700, name);
+  await fastCmd('Open Safari for me', /Opening Safari/);
+  await fastCmd('open youtube', /Opening youtube/);
+  await fastCmd('set the volume to 30', /Volume at 30/);
+  await fastCmd('turn it up a bit', /Louder/);
+  await fastCmd('lock the screen', /Locked/);
+  await fastCmd('switch to dark mode', /Dark mode on/);
+  await fastCmd('run movie night', /Movie night/);
+  await fastCmd('Schedule dinner with Sam on Friday at 7pm', /Dinner with Sam, .*7pm.*calendar/);
+  await fastCmd('track Netflix £10.99 a month', /Tracking Netflix at £10.99 a month/);
+  await fastCmd('thanks Jarvis', /Any time|Of course|My pleasure/);
+  await fastCmd('hello', /What do you need|What can I do|Go ahead/);
+  check('scheduled event is on the calendar', snap.events.some((e) => e.title === 'Dinner with Sam'));
+  const report = (await call('diagnose')).result;
+  check('the health check reports every part', /Mind: /.test(report) && /Ears: /.test(report) && /Voice: .*making speech [\d.]+x faster/.test(report) && /Music check \(Spotify\): (playing|paused)/.test(report) && /Calendar: \d+ events/.test(report) && /home: ok/.test(report), report.split('\n').slice(0, 6).join(' | ').slice(0, 300));
   if (process.argv.includes('--llm')) {
     while (snap.status.llm !== 'ready') await new Promise((r2) => setTimeout(r2, 500));
     audio.length = 0; const r3 = await say('Tell me in two sentences why sleep matters.'); await hush(9000);

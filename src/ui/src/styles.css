@@ -239,3 +239,7 @@ input[type='range'] { -webkit-appearance: none; appearance: none; flex: 1; heigh
 .quiz-last { font-size: 13px; line-height: 1.5; color: var(--text2); padding: 8px 11px; border-radius: 9px; border: 1px solid var(--hair); background: var(--panel2); max-height: 96px; overflow-y: auto; }
 .quiz-last b { font: 600 10.5px var(--mono); letter-spacing: .14em; text-transform: uppercase; margin-right: 6px; color: var(--accent2); } .quiz-last.right b { color: var(--ok); } .quiz-last.wrong b { color: var(--alert); }
 .quiz-actions { display: flex; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }
+
+.chip.spinning svg { animation: spin 0.8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
+.link-btn { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font: inherit; display: inline; }
+.report { white-space: pre-wrap; word-break: break-word; font: 11.5px/1.55 var(--mono); color: var(--text2); background: var(--panel2); border: 1px solid var(--hair); border-radius: 10px; padding: 10px 12px; max-height: 320px; overflow: auto; user-select: text; -webkit-user-select: text; cursor: text; margin-top: 8px; }

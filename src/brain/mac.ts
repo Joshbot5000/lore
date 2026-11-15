@@ -23,7 +23,7 @@ export type MacBridge = {
   openUrl(url: string): Promise<void>;
   setVolume(percent: number): Promise<void>;
   battery(): Promise<{ percent: number; charging: boolean } | null>;
-  system(action: 'lock' | 'sleep-display' | 'dark-mode' | 'mute' | 'unmute'): Promise<void>;
+  system(action: 'lock' | 'sleep-display' | 'dark-mode' | 'dark-on' | 'dark-off' | 'mute' | 'unmute' | 'louder' | 'quieter'): Promise<void>;
   /** English voices installed on this Mac, best first. */
   voices(): Promise<MacVoice[]>;
   /** Speak with one of the Mac's own voices. Returns 24 kHz 16-bit mono samples. */
@@ -46,28 +46,51 @@ export const realMac: MacBridge = {
   real: true,
 
   async music(app) {
-    const track =
-      app === 'Spotify'
-        ? `(name of t) & f & (artist of t) & f & (album of t) & f & art & f & (player position) & f & ((duration of t) / 1000) & f & (sound volume)`
-        : `(name of t) & f & (artist of t) & f & (album of t) & f & "" & f & (player position) & f & (duration of t) & f & (sound volume)`;
-    const out = await osa(`${SEP}if application ${q(app)} is running then
+    // Every property is read on its own, so one that this version of the app lacks (or a track
+    // that has none, such as an advert or a local file) cannot hide the rest. The player state is
+    // compared as a constant: turning it into text is unreliable from a script run this way.
+    const out = await osa(`if application ${q(app)} is running then
   tell application ${q(app)}
-    set st to (player state as string)
-    if st is "stopped" then return "stopped"
-    set t to current track
-    set art to ""
+    set st to "paused"
     try
-      set art to (artwork url of t) as string
+      if player state is playing then
+        set st to "playing"
+      else if player state is stopped then
+        set st to "stopped"
+      end if
     end try
-    return st & f & ${track}
+    set ti to ""
+    set ar to ""
+    set al to ""
+    set art to ""
+    set po to "0"
+    set du to "0"
+    set vo to "0"
+    try
+      set ti to (name of current track) as text
+    end try
+    try
+      set ar to (artist of current track) as text
+    end try
+    try
+      set al to (album of current track) as text
+    end try
+    ${app === 'Spotify' ? 'try\n      set art to (artwork url of current track) as text\n    end try' : ''}
+    try
+      set po to (player position) as text
+    end try
+    try
+      set du to (duration of current track) as text
+    end try
+    try
+      set vo to (sound volume) as text
+    end try
+    return st & linefeed & ti & linefeed & ar & linefeed & al & linefeed & art & linefeed & po & linefeed & du & linefeed & vo
   end tell
 else
   return "off"
 end if`);
-    if (out === 'off') return null;
-    if (out === 'stopped') return { app, state: 'stopped' };
-    const [st, title, artist, album, art, pos, dur, vol] = out.split(F);
-    return { app, state: st === 'playing' ? 'playing' : 'paused', title, artist, album, art: art || undefined, position: parseFloat(pos.replace(',', '.')) || 0, duration: parseFloat(dur.replace(',', '.')) || 0, volume: parseInt(vol, 10) || 0 };
+    return parseMusic(app, out);
   },
 
   async playMusic(app, what) {
@@ -137,12 +160,13 @@ end if`,
   async calendar(days) {
     const out = await osa(
       `${SEP}tell application "Calendar"
-  set t0 to (current date)
+  -- From the start of today, so today's all-day events and anything already under way are included.
+  set t0 to (current date) - (time of (current date))
   set t1 to t0 + (${days} * days)
   set out to ""
   repeat with c in calendars
     try
-      set evs to (every event of c whose start date ≥ t0 and start date ≤ t1)
+      set evs to (every event of c whose end date ≥ t0 and start date ≤ t1)
       repeat with e in evs
         set out to out & (uid of e) & f & (summary of e) & f & ((start date of e) as «class isot» as string) & f & ((end date of e) as «class isot» as string) & f & (allday event of e) & f & (name of c) & r
       end repeat
@@ -173,6 +197,8 @@ end tell`,
   async system(action) {
     if (action === 'lock' || action === 'sleep-display') await run('pmset', ['displaysleepnow']);
     else if (action === 'dark-mode') await osa('tell application "System Events" to tell appearance preferences to set dark mode to not dark mode');
+    else if (action === 'dark-on' || action === 'dark-off') await osa(`tell application "System Events" to tell appearance preferences to set dark mode to ${action === 'dark-on'}`);
+    else if (action === 'louder' || action === 'quieter') await osa(`set volume output volume (((output volume of (get volume settings)) ${action === 'louder' ? '+' : '-'} 12))`);
     else await osa(`set volume output muted ${action === 'mute'}`);
   },
 
@@ -263,6 +289,17 @@ export function fakeMac(): MacBridge {
     clipboard: async () => clip,
     setClipboard: async (t) => void (clip = t),
   };
+}
+
+/** Read the player's reply: eight lines (state, title, artist, album, artwork, position, duration, volume). */
+export function parseMusic(app: 'Spotify' | 'Music', out: string): NowPlaying | null {
+  if (out.trim() === 'off') return null;
+  const [st = '', title = '', artist = '', album = '', art = '', pos = '0', dur = '0', vol = '0'] = out.split(/\r?\n|\r/);
+  const num = (v: string): number => parseFloat(v.replace(',', '.')) || 0;
+  if (!title.trim()) return { app, state: 'stopped', volume: Math.round(num(vol)) };
+  // Spotify reports a track's length in milliseconds, Music in seconds.
+  const duration = num(dur) > 36000 ? num(dur) / 1000 : num(dur);
+  return { app, state: st.trim() === 'playing' ? 'playing' : st.trim() === 'stopped' ? 'stopped' : 'paused', title: title.trim(), artist: artist.trim(), album: album.trim(), art: art.trim() || undefined, position: num(pos), duration, volume: Math.round(num(vol)) };
 }
 
 /** `say -v ?` prints one voice per line: name, locale, then a sample sentence. */

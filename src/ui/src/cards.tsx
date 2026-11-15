@@ -4,7 +4,7 @@ import { act, call, get, set, toast, useLink, useSnap } from './link';
 import { hush, setHandsFree, talkEnd, talkStart, unlock } from './voice';
 import { Core } from './Core';
 import { Card, WeatherIcon, ago, clock, dayName, mmss } from './bits';
-import { describeWhen } from '../../shared/when';
+import { describeWhen, eventOver } from '../../shared/when';
 import type { Task } from '../../shared/types';
 
 function useNow(ms = 1000): Date {
@@ -69,7 +69,7 @@ export function UpcomingCard() {
   const events = useSnap((s) => s.events);
   const state = useSnap((s) => s.integrations.calendar);
   useNow(30000);
-  const next = events.filter((e) => e.end > Date.now()).slice(0, 6);
+  const next = events.filter((e) => !eventOver(e)).slice(0, 6);
   return (
     <Card id="upcoming" tab="today" label="Upcoming" right={<span className="label dim">{next.filter((e) => new Date(e.start).toDateString() === new Date().toDateString()).length} today</span>}>
       {!next.length ? (
@@ -77,12 +77,12 @@ export function UpcomingCard() {
       ) : (
         <ul className="rows">
           {next.map((e) => {
-            const live = e.start <= Date.now();
+            const live = e.start <= Date.now() && !e.allDay;
             return (
               <li key={e.id} className={live ? 'live' : ''}>
                 <span className="when mono">{e.allDay ? 'all day' : clock(e.start)}</span>
                 <span className="grow"><b>{e.title}</b>{e.where && <i>{e.where}</i>}</span>
-                <span className="tag">{live ? 'now' : dayName(e.start)}</span>
+                <span className="tag">{live ? 'now' : e.allDay && e.start <= Date.now() ? 'Today' : dayName(e.start)}</span>
               </li>
             );
           })}
@@ -159,6 +159,7 @@ export function TasksCard() {
 export function MusicCard() {
   const m = useSnap((s) => s.music);
   const app = useSnap((s) => s.settings.musicApp);
+  const state = useSnap((s) => s.integrations.music);
   const [pos, setPos] = useState(m?.position ?? 0);
   useEffect(() => setPos(m?.position ?? 0), [m?.position, m?.title]);
   useEffect(() => {
@@ -170,7 +171,7 @@ export function MusicCard() {
   return (
     <Card id="music" tab="life" label="Now playing" right={<span className="label dim">{app}</span>}>
       {!m || !m.title ? (
-        <div className="empty">Nothing playing. Open {app} and I will take the controls.</div>
+        <div className="empty">{state.state === 'error' ? `I can't read ${app} right now: ${state.detail}` : m ? `Nothing playing in ${app}.` : `${app} isn't open. Open it and I will take the controls.`}</div>
       ) : (
         <div className="music">
           <div className={`art ${playing ? 'spin' : ''}`} style={m.art ? { backgroundImage: `url(${m.art})` } : undefined}>{!m.art && <span className="eq"><i /><i /><i /><i /></span>}</div>

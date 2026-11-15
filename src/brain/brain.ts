@@ -12,13 +12,14 @@ import type { MacBridge } from './mac';
 import { forecast, geocode, weatherSentence, type Fetch } from './weather';
 import { expand, parseIcs } from './ics';
 import { musicRequest, readPage, spotifyUri, webSearch, wikipedia } from './web';
-import { describeWhen, parseWhen, speakable, takeSentences } from '../shared/when';
+import { describeWhen, eventOver, parseWhen, speakable, takeSentences } from '../shared/when';
 import { dayKey, daysUntil, doneToday, focusStats, inDays, isFocusStop, matchCountdown, matchHabit, parseFocus, spokenMinutes, streak, tidy } from './life';
 import { aboutRecordings, defaultHarkDir, harkContext, namesRecording, readHark, type HarkRec } from './hark';
 import { HomeAssistant, isOn, matchEntities, parseHomeCommand, tapService, type HaEntity } from './ha';
 import { MAIL_PRESETS, fetchUnread } from './imap';
 import fs from 'node:fs';
 import { contentWords, deckStats, fetchRepo, grade, isDue, isRepo, looksLegal, matchDecks, pickCards, readFolder, record, studyContext, vocabulary, type Card, type Library } from './study';
+import { OPENAI_VOICES, elevenSpeak, elevenVoices, openaiCheck, openaiSpeak, type CloudVoice } from './cloudvoice';
 import { DEFAULT_SETTINGS, uid } from '../shared/types';
 import type { Focus, FocusNow, Habit, Recording, Routine } from '../shared/types';
 import type { CalEvent, ChatMsg, EngineStatus, HomeAction, Integrations, Mail, Memory, Need, NowPlaying, Push, Settings, Snapshot, Task, Timer, ToolUse, Vitals, Weather } from '../shared/types';
@@ -36,6 +37,8 @@ export type BrainOptions = {
   /** Where Hark keeps its library, if not in the usual place. */
   harkDir?: string;
 };
+
+type LlmStats = { streamId: string; read: number; wrote: number; firstMs: number; ms: number };
 
 type Tool = {
   name: string;
@@ -73,6 +76,43 @@ export function splitCommands(text: string): string[] {
   // Every piece must itself read as a request, and the first must be an action (not a question about two things).
   if (!parts.every((p) => COMMAND.test(p.trim())) || /^(what|who|when|where|how|tell me)\b/i.test(parts[0].trim())) return [text];
   return parts.map((p) => p.trim().replace(/[.!]+$/, ''));
+}
+
+/** Which parts of Jarvis's view of the day a question could draw on. */
+export function relevant(q: string): Record<'weather' | 'calendar' | 'tasks' | 'mail' | 'home' | 'music' | 'timers' | 'money' | 'notes' | 'focus' | 'habits' | 'countdowns', boolean> {
+  const t = q.toLowerCase();
+  const broad = /\b(plan|should i|what should|advice|suggest|recommend|my day|this (evening|morning|afternoon|week|weekend)|tonight|today|tomorrow|weekend|free time|busy|priorit|focus on|catch me up|what.s (up|going on|happening)|anything (i|else)|forget(ting)? anything)\b/.test(t);
+  return {
+    weather: broad || /\b(weather|rain|cold|warm|hot|sunny|coat|umbrella|outside|walk|run|jog|cycle|forecast)\b/.test(t),
+    calendar: broad || /\b(calendar|schedule|meeting|event|appointment|free|when|seminar|lecture|deadline|diary|booked)\b/.test(t),
+    tasks: broad || /\b(task|to-?do|list|remind|due|deadline|work on|need to|outstanding|overdue)\b/.test(t),
+    mail: /\b(e-?mails?|mail|inbox|messages?|wrote|sent me|reply|replied)\b/.test(t),
+    home: /\b(lights?|heating|home|house|lamp|switch|thermostat|temperature)\b/.test(t),
+    music: /\b(music|song|playing|listen|track|artist|album|spotify|tune)\b/.test(t),
+    timers: /\btimers?\b/.test(t),
+    money: /\b(money|bills?|spending|subscriptions?|afford|budget|pay|cost|income|salary|rent)\b|[£$]/.test(t),
+    notes: /\b(notes?|wrote down|jotted|notebook)\b/.test(t),
+    focus: /\b(focus|focused|study|studied|revis\w*|productiv\w*|streak|goal|worked)\b/.test(t),
+    habits: /\b(habits?|streak|routine)\b/.test(t),
+    countdowns: /\b(countdown|exam|until|how (long|many days)|deadline|days left)\b/.test(t),
+  };
+}
+
+/** The few tools a request could need, judged from its wording. A small model handed every tool misuses them. */
+const TOOL_CUES: [string, RegExp][] = [
+  ['remember', /\bremember\b/i], ['forget', /\bforget\b/i], ['add_task', /\b(remind|to-?do|list|task)\b/i], ['complete_task', /\b(done|finished|completed|tick|mark|complete)\b/i],
+  ['add_note', /\b(note|write (that |this )?down|jot)\b/i], ['set_timer', /\btimer\b/i], ['add_event', /\b(schedule|book|calendar|appointment|meeting|diary)\b/i],
+  ['music', /\b(music|song|play|pause|skip|spotify|track|album|playlist)\b/i], ['run_shortcut', /\b(shortcut|scene|run)\b/i], ['open_app_or_website', /\b(open|launch|go to|website|app)\b/i],
+  ['computer', /\b(volume|mute|unmute|lock|dark mode|light mode|louder|quieter)\b/i], ['get_weather', /\b(weather|forecast)\b.*\b(in|at|for)\b/i], ['add_money', /\b(track|bill|subscription|income|salary)\b|[£$]\d/i],
+];
+export const toolsFor = (text: string, acting: boolean, outward: boolean): string[] => [
+  ...(acting ? TOOL_CUES.filter(([, re]) => re.test(text)).map(([name]) => name).slice(0, 3) : /\b(weather|forecast)\b.*\b(in|at|for) [A-Z]/.test(text) ? ['get_weather'] : []),
+  ...(outward ? ['web_search'] : []),
+];
+
+/** What should be shown and said of a model's raw output so far: its private reasoning is dropped. */
+export function visibleText(raw: string): string {
+  return raw.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*$/, '').replace(/<\/?(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?$/, '').replace(/^\s+/, '');
 }
 
 /** Cut the silence a voice pads its clips with (16-bit samples), leaving a few milliseconds and a soft edge. */
@@ -115,6 +155,9 @@ export class Brain extends EventEmitter {
   private integrations: Integrations = {
     weather: { state: 'setup' }, calendar: { state: 'off' }, mail: { state: 'off' }, music: { state: 'off' }, home: { state: 'off' }, system: { state: 'ok' }, hark: { state: 'off' },
   };
+  private llmStats: LlmStats[] = [];
+  private learning = '';
+  private lastAsr: { ms: number; secs: number } | null = null;
   private focusNow: FocusNow | null = null;
   private library: Library = { decks: [], notes: [], syncedAt: 0, source: '' };
   private vocab = new Set<string>();
@@ -150,6 +193,10 @@ export class Brain extends EventEmitter {
       this.voiceReady = false;
     };
     this.llm = new Engine(o.forkLlm, 'llm.js', 'mind');
+    this.llm.on('stats', (st: LlmStats) => {
+      this.llmStats = [...this.llmStats.slice(-11), st];
+      if (process.env.JARVIS_DEBUG) console.log('[llm]', JSON.stringify(st));
+    });
     this.llm.on('exit', () => {
       this.llmLoaded = '';
       this.llmInfo = null;
@@ -177,16 +224,17 @@ export class Brain extends EventEmitter {
     // An update can change a model (the voice moved to its full-quality version): fetch it without being asked.
     if (this.settings.onboarded && !this.models.installed('voice') && this.models.installed(this.settings.asrModel)) void this.models.download('voice');
     void this.ensureAsr().catch(() => undefined);
-    void this.ensureVoice().catch(() => undefined);
+    // The built-in voice takes a good deal of memory: only load it up front if it is the one in use.
+    if (!/^(mac|eleven|openai):/.test(this.settings.voice)) void this.ensureVoice().catch(() => undefined);
     setTimeout(() => void this.ensureLlm().catch(() => undefined), 1500);
     const every = (ms: number, fn: () => unknown) => {
       this.intervals.push(setInterval(() => void fn(), ms));
       void fn();
     };
     every(15 * 60e3, () => this.refreshWeather());
-    every(4e3, () => this.refreshMusic());
+    every(2500, () => this.refreshMusic());
     every(120e3, () => this.refreshMail());
-    every(10 * 60e3, () => this.refreshCalendar());
+    every(5 * 60e3, () => this.refreshCalendar());
     every(10 * 60e3, () => this.refreshHome());
     every(5e3, () => this.refreshVitals());
     every(120e3, () => this.refreshHark());
@@ -349,12 +397,15 @@ export class Brain extends EventEmitter {
 
   async refreshCalendar(): Promise<void> {
     const s = this.settings;
-    const from = Date.now() - 36e5, to = Date.now() + 14 * 864e5;
+    const from = new Date().setHours(0, 0, 0, 0), to = Date.now() + 14 * 864e5;
     const all: CalEvent[] = this.store.get('events').filter((e) => e.end >= from && e.start <= to).map((e) => ({ ...e, calendar: 'Jarvis' }));
     let ok = false, problem = '';
     for (const url of s.calendarUrls) {
       try {
-        const res = await this.o.fetch(url.replace(/^webcal:/, 'https:'));
+        // A feed that never answers must not leave yesterday's events on screen.
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 20000);
+        const res = await this.o.fetch(url.replace(/^webcal:/, 'https:'), { signal: ctrl.signal, cache: 'no-store' } as never).finally(() => clearTimeout(timer));
         if (!res.ok) throw new Error(`Calendar feed returned ${res.status}`);
         all.push(...expand(parseIcs(await res.text()), from, to, 'Calendar'));
         ok = true;
@@ -376,8 +427,9 @@ export class Brain extends EventEmitter {
     const seen = new Set<string>();
     this.events = all.sort((a, b) => a.start - b.start).filter((e) => {
       const k = `${e.title}|${e.start}`;
-      return seen.has(k) ? false : (seen.add(k), true);
+      return seen.has(k) || eventOver(e) ? false : (seen.add(k), true);
     });
+    this.calendarAt = Date.now();
     this.setIntegration('calendar', ok ? 'ok' : problem ? 'error' : all.length ? 'ok' : 'setup', ok ? undefined : problem || 'Add a calendar in Settings');
     this.patch({ events: this.events, needs: this.needs() });
   }
@@ -596,7 +648,7 @@ export class Brain extends EventEmitter {
 
   private dayText(offset: 0 | 1): string {
     const start = new Date().setHours(0, 0, 0, 0) + offset * 864e5, end = start + 864e5, now = Date.now();
-    const evs = this.events.filter((e) => e.start < end && e.end > Math.max(start, offset ? start : now));
+    const evs = this.events.filter((e) => !eventOver(e) && e.start < end && e.end > Math.max(start, offset ? start : now));
     const at = (t: number) => new Date(t).toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(':00', '').replace(' ', '');
     const day = offset ? 'tomorrow' : 'today';
     if (this.integrations.calendar.state !== 'ok' && !evs.length) return `I can't see a calendar yet. Add one in Settings.`;
@@ -727,6 +779,49 @@ export class Brain extends EventEmitter {
     return this.vocab.size > 0 && (studyContext(this.library, this.vocab, q) !== '' || looksLegal(q));
   }
 
+  /** A plain-text health report: what is connected, how fast each part is running, and any errors. For troubleshooting. */
+  async diagnose(): Promise<string> {
+    const s = this.settings;
+    const L: string[] = [`Jarvis ${this.o.version} health check, ${new Date().toLocaleString('en-GB')}`];
+    L.push(`Computer: ${os.cpus()[0]?.model ?? 'unknown'}, ${this.ramGb} GB memory, ${Math.round(os.freemem() / 2 ** 20)} MB free, macOS ${os.release()}, real Mac integrations: ${this.o.mac.real}`);
+    L.push(`Mind: ${s.llmModel} is ${this.status.llm}${this.llmInfo ? `, running on ${this.llmInfo.gpu === 'metal' ? 'the Apple GPU (good)' : this.llmInfo.gpu === 'false' || this.llmInfo.gpu === 'cpu' ? 'the CPU only (slow: this is a problem)' : this.llmInfo.gpu}, context ${this.llmInfo.contextSize}` : ''}`);
+    for (const st of this.llmStats.filter((x) => /^t\d/.test(x.streamId)).slice(-5)) L.push(`  reply ${st.streamId}: read ${st.read} tokens, wrote ${st.wrote}, first word after ${st.firstMs} ms, finished in ${st.ms} ms (${st.wrote > 2 ? Math.round((st.wrote / Math.max(1, st.ms - st.firstMs)) * 1000) : '?'} tokens/s)`);
+    L.push(`Ears: ${s.asrModel} is ${this.status.asr}${this.lastAsr ? `, last transcription took ${this.lastAsr.ms} ms for ${this.lastAsr.secs.toFixed(1)} s of speech` : ''}`);
+    L.push(`Voice: ${s.voice} at ${s.speed}x, built-in voice ${this.status.voice}${this.voiceStats ? `; last passage: ${this.voiceStats.lastChars} characters in ${this.voiceStats.lastMs} ms, making speech ${this.voiceStats.rate}x faster than it is spoken${this.voiceStats.rate < 1.5 ? ' (too slow: expect gaps)' : ''}` : ''}${this.cloudDown ? `; cloud voice problem: ${this.cloudDown}` : ''}`);
+    for (const [turn, m] of [...this.marks].slice(-4)) if (m.think !== undefined) L.push(`  turn ${turn}: heard ${m.asr ?? 0} ms, thought ${m.think} ms, voice ${m.voice ?? '-'} ms`);
+    for (const [k, v] of Object.entries(this.integrations)) L.push(`${k}: ${v.state}${v.detail ? ` (${v.detail})` : ''}`);
+    try {
+      const m = await this.o.mac.music(s.musicApp);
+      L.push(`Music check (${s.musicApp}): ${m ? `${m.state}${m.title ? `, “${m.title}” by ${m.artist}` : ', no track'}` : 'the app is not running'}`);
+    } catch (err) {
+      L.push(`Music check (${s.musicApp}) FAILED: ${(err as Error).message}`);
+    }
+    L.push(`Calendar: ${this.events.length} events, last refreshed ${this.calendarAt ? `${Math.round((Date.now() - this.calendarAt) / 1000)} s ago` : 'never'}; sources: ${s.useAppleCalendar ? 'Apple Calendar' : ''}${s.calendarUrls.length ? ` + ${s.calendarUrls.length} link(s)` : ''}`);
+    for (const e of this.events.slice(0, 8)) L.push(`  ${e.allDay ? 'all-day' : 'timed'} “${e.title}” ${new Date(e.start).toLocaleString('en-GB')} to ${new Date(e.end).toLocaleString('en-GB')} [${e.calendar ?? '?'}]`);
+    L.push(`Mail: ${this.unread} unread; accounts: ${s.mailAccounts.map((a) => `${a.user} via ${a.host}`).join(', ') || 'none'}; Apple Mail ${s.useAppleMail ? 'on' : 'off'}`);
+    L.push(`Revision: ${this.library.decks.length} decks, ${this.library.notes.length} note sections${this.studyError ? `, error: ${this.studyError}` : ''}`);
+    return L.join('\n');
+  }
+
+  private refreshing: Promise<boolean> | null = null;
+  /** Bring everything on the dashboard up to date. */
+  refreshAll(): Promise<boolean> {
+    this.refreshing ??= Promise.allSettled([this.refreshCalendar(), this.refreshMail(), this.refreshWeather(), this.refreshMusic(), this.refreshHome(), this.refreshHa(), this.syncStudy()])
+      .then(() => {
+        this.refreshHark();
+        this.patch({ events: this.events, needs: this.needs() });
+        return true;
+      })
+      .finally(() => (this.refreshing = null));
+    return this.refreshing;
+  }
+
+  /** Events that have not finished yet, soonest first. */
+  private upcoming(): CalEvent[] {
+    const now = Date.now();
+    return this.events.filter((e) => !eventOver(e, now));
+  }
+
   private batteryAt = 0;
   async refreshVitals(): Promise<void> {
     const now = os.cpus().map((c) => c.times);
@@ -748,8 +843,16 @@ export class Brain extends EventEmitter {
   }
 
   /** Once a second: timers, reminders and heads-ups. */
+  private calendarAt = 0;
+  private lastTick = Date.now();
+  private lastDay = new Date().getDate();
   private tick(): void {
     const now = Date.now();
+    // Waking from sleep, or a new day: what is on screen is out of date, so look again at once.
+    const woke = now - this.lastTick > 20e3, newDay = new Date().getDate() !== this.lastDay;
+    this.lastTick = now;
+    this.lastDay = new Date().getDate();
+    if (woke || newDay) void this.refreshAll();
     const done = this.timers.filter((t) => t.endsAt <= now);
     if (done.length) {
       this.timers = this.timers.filter((t) => t.endsAt > now);
@@ -802,7 +905,7 @@ export class Brain extends EventEmitter {
     const endOfDay = new Date().setHours(23, 59, 59, 999);
     const today = tasks.filter((t) => t.due && t.due >= now && t.due <= endOfDay);
     if (today.length) out.push({ id: 'today', tone: 'warn', text: today.length === 1 ? `Today: ${today[0].title}` : `${today.length} tasks due today`, action: { view: 'tasks' } });
-    const next = this.events.find((e) => e.start > now && e.start - now < 3 * 36e5 && !e.allDay);
+    const next = this.upcoming().find((e) => e.start > now && e.start - now < 3 * 36e5 && !e.allDay);
     if (next) out.push({ id: 'next', tone: 'info', text: `${next.title} in ${Math.max(1, Math.round((next.start - now) / 6e4))} min` });
     if (this.unread) out.push({ id: 'mail', tone: 'info', text: `${this.unread} unread email${this.unread === 1 ? '' : 's'}` });
     const dom = new Date().getDate();
@@ -909,7 +1012,7 @@ export class Brain extends EventEmitter {
     const name = this.settings.userName || 'The user';
     try {
       const raw = await this.llm.call<string>('generate', {
-        streamId: `learn${++this.turnSeq}`,
+        streamId: (this.learning = `learn${++this.turnSeq}`),
         system: 'You maintain a personal assistant\'s long-term memory. You are precise and never invent details.',
         prompt: `${name} said: "${text}"\n\nList any lasting personal facts worth remembering about ${name} from this message: preferences, people in their life, places, routines, work or study, goals, important dates. Ignore one-off requests, questions, small talk, things they are doing right now and tasks they have finished. Write each fact as one short sentence starting with "${name}". If there is nothing lasting, reply with exactly NONE.`,
         maxTokens: 120,
@@ -1086,30 +1189,35 @@ export class Brain extends EventEmitter {
     const now = new Date();
     const L: string[] = [`Now: ${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}, ${now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}.`];
     L.push(`You are talking to: ${s.userName || 'the user'}${s.place ? `, who lives in ${s.place}` : ''}.`);
-    if (this.weather) L.push(`Weather: ${weatherSentence(this.weather)}.`);
+    // Only what bears on the question goes in: a short prompt is read in a fraction of the time, and a small
+    // model given everything tends to drag unrelated details into its answer.
+    const want = relevant(query);
+    if (!want.weather) {
+      /* not about the weather */
+    } else if (this.weather) L.push(`Weather: ${weatherSentence(this.weather)}.`);
     else L.push('Weather: not available right now (say so if asked; never guess it).');
-    const evs = this.events.filter((e) => e.end > now.getTime()).slice(0, 6);
-    L.push(evs.length ? `Calendar: ${evs.map((e) => `${e.title} (${describeWhen(e.start)})`).join('; ')}.` : 'Calendar: nothing coming up.');
-    const open = this.store.get('tasks').filter((t) => !t.done).slice(0, 10);
-    L.push(open.length ? `To-do list: ${open.map((t) => t.title + (t.due ? ` (due ${describeWhen(t.due)})` : '')).join('; ')}.` : 'To-do list: empty.');
-    if (this.integrations.mail.state === 'ok') L.push(this.unread ? `Inbox: ${this.unread} unread emails. ${this.mail.slice(0, 5).map((m) => `From ${m.from}, subject “${m.subject}”`).join('. ')}.` : 'Inbox: no unread emails.');
-    if (this.haEntities.length) {
+    const evs = this.upcoming().slice(0, 4);
+    if (want.calendar) L.push(evs.length ? `Calendar: ${evs.map((e) => `${e.title} (${describeWhen(e.start)})`).join('; ')}.` : 'Calendar: nothing coming up.');
+    const open = this.store.get('tasks').filter((t) => !t.done).slice(0, 6);
+    if (want.tasks) L.push(open.length ? `To-do list: ${open.map((t) => t.title + (t.due ? ` (due ${describeWhen(t.due)})` : '')).join('; ')}.` : 'To-do list: empty.');
+    if (want.mail && this.integrations.mail.state === 'ok') L.push(this.unread ? `Inbox: ${this.unread} unread emails. ${this.mail.slice(0, 5).map((m) => `From ${m.from}, subject “${m.subject}”`).join('. ')}.` : 'Inbox: no unread emails.');
+    if (want.home && this.haEntities.length) {
       const lit = this.haEntities.filter((e) => e.domain === 'light' && isOn(e));
       const heat = this.haEntities.find((e) => e.domain === 'climate');
       L.push(`Home: ${lit.length ? `${lit.length} light${lit.length === 1 ? '' : 's'} on (${lit.slice(0, 6).map((e) => e.name).join(', ')})` : 'all lights off'}${heat?.current !== undefined ? `; ${heat.name} is at ${heat.current} degrees${heat.temperature !== undefined ? `, set to ${heat.temperature}` : ''}` : ''}.`);
     }
-    if (this.music?.title) L.push(`Music: ${this.music.state} “${this.music.title}” by ${this.music.artist}.`);
-    if (this.timers.length) L.push(`Timers: ${this.timers.map((t) => `${t.label || 'timer'} with ${Math.ceil((t.endsAt - now.getTime()) / 6e4)} min left`).join('; ')}.`);
+    if (want.music && this.music?.title) L.push(`Music: ${this.music.state} “${this.music.title}” by ${this.music.artist}.`);
+    if (want.timers && this.timers.length) L.push(`Timers: ${this.timers.map((t) => `${t.label || 'timer'} with ${Math.ceil((t.endsAt - now.getTime()) / 6e4)} min left`).join('; ')}.`);
     const money = this.store.get('money');
-    if (money.length) L.push(`Regular money: ${money.map((m) => `${m.name} ${s.currency}${m.amount}/${m.every} (${m.kind})`).join('; ')}.`);
+    if (want.money && money.length) L.push(`Regular money: ${money.map((m) => `${m.name} ${s.currency}${m.amount}/${m.every} (${m.kind})`).join('; ')}.`);
     const notes = this.store.get('notes').slice(0, 4);
-    if (notes.length) L.push(`Recent notes: ${notes.map((n) => `“${n.text.slice(0, 80)}”`).join('; ')}.`);
+    if (want.notes && notes.length) L.push(`Recent notes: ${notes.map((n) => `“${n.text.slice(0, 80)}”`).join('; ')}.`);
     const fs = focusStats(this.store.get('focus'));
-    if (fs.week || this.focusNow) L.push(`Focused work: ${fs.today} minutes today (daily goal ${s.focusGoal}), ${fs.week} minutes over the last 7 days${fs.bySubject.length ? ` (${fs.bySubject.slice(0, 4).map(([k, v]) => `${k} ${v} min`).join(', ')})` : ''}, ${fs.streak}-day streak.${this.focusNow ? ` A focus session${this.focusNow.subject ? ` on ${this.focusNow.subject}` : ''} is running with ${Math.max(1, Math.ceil((this.focusNow.endsAt - now.getTime()) / 6e4))} minutes left.` : ''}`);
+    if (want.focus && (fs.week || this.focusNow)) L.push(`Focused work: ${fs.today} minutes today (daily goal ${s.focusGoal}), ${fs.week} minutes over the last 7 days${fs.bySubject.length ? ` (${fs.bySubject.slice(0, 4).map(([k, v]) => `${k} ${v} min`).join(', ')})` : ''}, ${fs.streak}-day streak.${this.focusNow ? ` A focus session${this.focusNow.subject ? ` on ${this.focusNow.subject}` : ''} is running with ${Math.max(1, Math.ceil((this.focusNow.endsAt - now.getTime()) / 6e4))} minutes left.` : ''}`);
     const habits = this.store.get('habits');
-    if (habits.length) L.push(`Daily habits: ${habits.map((h) => `${h.name} (${doneToday(h) ? 'done today' : 'not done yet today'}, ${streak(h.days)}-day streak)`).join('; ')}.`);
+    if (want.habits && habits.length) L.push(`Daily habits: ${habits.map((h) => `${h.name} (${doneToday(h) ? 'done today' : 'not done yet today'}, ${streak(h.days)}-day streak)`).join('; ')}.`);
     const cds = this.store.get('countdowns').filter((c) => daysUntil(c.date) >= 0).sort((a, b) => a.date - b.date).slice(0, 6);
-    if (cds.length) L.push(`Countdowns: ${cds.map((c) => `${c.title} ${inDays(daysUntil(c.date))} (${new Date(c.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long' })})`).join('; ')}.`);
+    if (want.countdowns && cds.length) L.push(`Countdowns: ${cds.map((c) => `${c.title} ${inDays(daysUntil(c.date))} (${new Date(c.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'long' })})`).join('; ')}.`);
     const revision = this.vocab.size ? studyContext(this.library, this.vocab, query) : '';
     if (revision) L.push(`From ${s.userName || 'the user'}'s own revision notes and flashcards (answer from these; if they don't cover the point, say the notes don't cover it rather than guessing):\n${revision}`);
     else if (this.vocab.size && looksLegal(query)) L.push(`Revision notes: nothing on this in ${s.userName || 'the user'}'s notes. The user has already been told so; answer in one sentence from general knowledge.`);
@@ -1119,7 +1227,7 @@ export class Brain extends EventEmitter {
       const clip = (await this.o.mac.clipboard().catch(() => '')).trim();
       L.push(clip ? `Clipboard (text ${s.userName || 'the user'} copied): «${clip.slice(0, 3000)}»` : 'Clipboard: empty, or not text.');
     }
-    const mems = await this.recall(query);
+    const mems = await this.recall(query, 4);
     if (mems.length) L.push(`What you remember about ${s.userName || 'the user'}: ${mems.map((m) => m.text).join(' ')}`);
     return L.join('\n');
   }
@@ -1127,12 +1235,9 @@ export class Brain extends EventEmitter {
   private persona(): string {
     const s = this.settings;
     const who = s.userName || 'the user';
-    const address = s.address === 'name' ? (s.userName ? `Call them ${s.userName}, sparingly.` : '') : `Address them as "${this.you()}", sparingly.`;
-    return `You are ${s.assistantName}, ${who}'s personal assistant, running privately on their own computer. You are calm, capable and quick, with a dry British wit that you use lightly. ${address}
-
-Your replies are spoken aloud by a voice, so write exactly what a warm, quick-witted person would say out loud in conversation: one or two flowing sentences, contractions throughout (it's, you've, I'll), plain everyday words, no lists, no markdown, no emoji, no brackets, no abbreviations a voice would stumble on. Let sentences run naturally rather than clipping them into fragments. Give the answer first, in the first few words. Don't repeat the question back or pad with offers of more help. Never read out raw data such as URLs or IDs.
-
-Each request comes with a <context> block. It is your live view of their world: the time, weather, calendar, to-do list, inbox, music, focus time, habits, countdowns, sometimes their recorded conversations or clipboard, and what you remember about them. Treat it as things you can see, and answer from it directly. When the user asks you to do something, use a tool, then confirm in a few words what you did. Act only on the newest message: everything earlier in the conversation has already been dealt with. Use web_search only for facts about the outside world that you are not sure of, never for anything about the user themselves. If something cannot be done, say so plainly. Never say something is done unless you called a tool for it in this reply and it succeeded.`;
+    const address = s.address === 'name' ? (s.userName ? ` Call them ${s.userName} now and then.` : '') : ` Address them as "${this.you()}" now and then.`;
+    // Kept short on purpose: this is read before every reply.
+    return `You are ${s.assistantName}, ${who}'s personal assistant: calm, quick, with a dry British wit used lightly.${address} You are speaking aloud in conversation. Reply in one or two short, natural spoken sentences with contractions; give the answer first; no lists, no markdown, no emoji. The lines under <context> are things you can see about ${who}'s day: use them as facts, and never invent appointments, tasks, emails or details that are not there. If asked to do something you have no tool for, say plainly that you can't do that yet.`;
   }
 
   /** Instant answers for the simplest commands: no need to wake the language model. */
@@ -1158,6 +1263,119 @@ Each request comes with a <context> block. It is your live view of their world: 
       if (!v.cards) return { reply: 'I have no flashcards loaded yet.' };
       const weakest = [...v.decks].sort((a, b) => a.solid / a.total - b.solid / b.total)[0];
       return { reply: `${v.due ? `${v.due} card${v.due === 1 ? ' is' : 's are'} due` : 'Nothing is due'}, and ${v.decks.reduce((n, d) => n + d.fresh, 0)} you haven't seen yet. ${v.decks.reduce((n, d) => n + d.solid, 0)} of ${v.cards} are solid${weakest && weakest.solid < weakest.total ? `; ${weakest.name.toLowerCase()} needs the most work` : ''}.` };
+    }
+
+    // ---- everyday commands, carried out directly: instant, and never at the mercy of the language model
+    const said = text.trim().replace(new RegExp(`^(hey |ok |okay )?${s.assistantName}[,.!]?\\s*`, 'i'), '').replace(/^(please |can you |could you |will you |would you )+/i, '').replace(/( please| for me| now)+[.!?]*$/i, '').replace(/[.!?]+$/, '').trim();
+    if (/^(hi|hello|hey|hiya|yo|good (morning|afternoon|evening))( there)?$/.test(c) && !this.matchRoutine(text)) return { reply: [`Hello${s.userName ? ', ' + s.userName : ''}. What do you need?`, `Here${s.userName ? ', ' + s.userName : ''}. What can I do?`, "I'm here. Go ahead."][new Date().getSeconds() % 3] };
+    if (/^(thanks|thank you|cheers|ta|thanks a lot|thank you very much|nice one|perfect|great|brilliant)( jarvis)?$/.test(c)) return { reply: ['Any time.', 'Of course.', 'My pleasure.'][new Date().getSeconds() % 3] };
+    if (/^(never ?mind|forget it|cancel( that)?|nothing|stop|shush|be quiet|quiet|thats all|that is all)$/.test(c.replace(/'/g, ''))) return { reply: '' };
+    if (/^(how are you|how are you doing|hows it going|you ok|are you there|can you hear me)$/.test(c.replace(/'/g, ''))) return { reply: ['All systems running smoothly. What do you need?', "I'm here and listening.", 'Running well, thanks. What can I do for you?'][new Date().getSeconds() % 3] };
+    if (/^(who are you|what are you|what can you do|what do you do|help|what can i ask( you)?)$/.test(c)) return { reply: `I'm ${s.assistantName}. I keep your day in order: calendar, reminders, mail, music, focus sessions, habits and revision quizzes, and I can answer questions or look things up. Just ask.` };
+    if (/^(who am i|whats my name|what is my name|do you know (who i am|my name))$/.test(c.replace(/'/g, ''))) return { reply: s.userName ? `You're ${s.userName}.` : "You haven't told me your name yet. Add it in Settings." };
+    if (/^(whats your name|what is your name|what are you called|what should i call you)$/.test(c.replace(/'/g, ''))) return { reply: `I'm ${s.assistantName}.` };
+    let mm: RegExpMatchArray | null;
+    if ((mm = said.match(/^(?:open|launch|start up|pull up|bring up|go to|take me to) (?:the |my )?(.+?)(?: app| website| site)?$/i)) && !/\b(focus|study|quiz|timer|session|routine|briefing)\b/i.test(mm[1])) {
+      const SITES: Record<string, string> = { youtube: 'https://www.youtube.com', gmail: 'https://mail.google.com', google: 'https://www.google.com', netflix: 'https://www.netflix.com', 'bbc news': 'https://www.bbc.co.uk/news', bbc: 'https://www.bbc.co.uk', iplayer: 'https://www.bbc.co.uk/iplayer', twitter: 'https://x.com', x: 'https://x.com', instagram: 'https://www.instagram.com', linkedin: 'https://www.linkedin.com', github: 'https://github.com', amazon: 'https://www.amazon.co.uk', chatgpt: 'https://chatgpt.com', claude: 'https://claude.ai', 'google drive': 'https://drive.google.com', 'google calendar': 'https://calendar.google.com', 'google maps': 'https://maps.google.com', maps: 'https://maps.google.com', reddit: 'https://www.reddit.com', facebook: 'https://www.facebook.com', outlook: 'https://outlook.live.com', notion: 'https://www.notion.so' };
+      const name = mm[1].trim();
+      const site = SITES[name.toLowerCase()];
+      try {
+        if (site) await this.o.mac.openUrl(site);
+        else if (/^https?:\/\//i.test(name) || /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(name)) await this.o.mac.openUrl(/^https?:/i.test(name) ? name : `https://${name}`);
+        else await this.o.mac.openApp(name.replace(/\b\w/g, (ch) => ch.toUpperCase()));
+        return { reply: `Opening ${name}.`, tool: did('open', `Opened ${name}`) };
+      } catch {
+        return { reply: `I couldn't find an app called ${name}.`, tool: { name: 'open', label: `Couldn't open ${name}`, ok: false } };
+      }
+    }
+    if ((mm = c.match(/^(?:set |turn |put |change )?(?:the |my )?(?:system |mac |computer |laptop )?volume (?:to |at |up to |down to )?(\d{1,3})(?: percent)?$/))) {
+      await this.o.mac.setVolume(Math.min(100, +mm[1]));
+      return { reply: `Volume at ${Math.min(100, +mm[1])}.`, tool: did('computer', `Volume ${Math.min(100, +mm[1])}%`) };
+    }
+    if ((mm = c.match(/^(?:turn |make )?(?:it |the volume |the sound |that |the music |volume )?(up|down|louder|quieter)(?: a bit| a little| slightly)?$/) ?? c.match(/^(?:turn|make) (up|down|louder|quieter) (?:the )?(?:volume|sound|music)$/) ?? c.match(/^(louder|quieter)$/))) {
+      const up = /up|louder/.test(mm[1]);
+      await this.o.mac.system(up ? 'louder' : 'quieter');
+      return { reply: up ? 'Louder.' : 'Quieter.', tool: did('computer', up ? 'Volume up' : 'Volume down') };
+    }
+    if (/^(mute|unmute)( the)?( sound| volume| mac| computer| laptop| it)?$/.test(c)) {
+      const un = c.startsWith('unmute');
+      await this.o.mac.system(un ? 'unmute' : 'mute');
+      return { reply: un ? 'Sound back on.' : 'Muted.', tool: did('computer', un ? 'Unmuted' : 'Muted') };
+    }
+    if (/^lock( the| my)?( screen| mac| computer| laptop)?$/.test(c)) {
+      await this.o.mac.system('lock');
+      return { reply: 'Locked.', tool: did('computer', 'Locked the screen') };
+    }
+    if ((mm = c.match(/^(?:turn |switch |put )?(on|off) dark mode$/) ?? c.match(/^(?:turn |switch |put )?dark mode (on|off)$/) ?? c.match(/^(?:switch|change|go) to (dark|light) mode$/) ?? c.match(/^(dark|light) mode$/))) {
+      const on = mm[1] === 'on' || mm[1] === 'dark';
+      await this.o.mac.system(on ? 'dark-on' : 'dark-off');
+      return { reply: on ? 'Dark mode on.' : 'Light mode on.', tool: did('computer', on ? 'Dark mode' : 'Light mode') };
+    }
+    const shortcut = this.shortcutTiles.find((h) => h.name.toLowerCase() === c.replace(/^(run|start|do|activate|trigger) (the |my )?/, '').replace(/ (shortcut|scene)$/, ''));
+    // A Home Assistant scene of the same name takes precedence (handled further down).
+    if (shortcut && /^(run|start|do|activate|trigger) /.test(c) && !(this.haEntities.length && parseHomeCommand(c, this.haEntities))) {
+      try {
+        await this.o.mac.runShortcut(shortcut.name);
+        return { reply: `${shortcut.name}, done.`, tool: did('run_shortcut', `Ran “${shortcut.name}”`) };
+      } catch (err) {
+        return { reply: `That shortcut failed: ${(err as Error).message}.`, tool: { name: 'run_shortcut', label: `${shortcut.name} failed`, ok: false } };
+      }
+    }
+    if ((mm = said.match(/^(?:schedule|book|put|add) (?:in )?(?:a |an |my )?(.+?) (?:in|into|to|on) (?:my |the )?(?:calendar|diary)(?: (?:for|on|at) )?(.*)$/i) ?? said.match(/^(?:schedule|book)(?: in)? (?:a |an |my )?(.+)$/i))) {
+      // "schedule dinner with Sam on Friday at 7": find where the title ends and the time begins.
+      let title = mm[1], when = mm[2] ?? '';
+      if (!when) {
+        const words = mm[1].split(/\s+/);
+        for (let i = 1; i < words.length; i++) {
+          const tail = words.slice(i).join(' ');
+          if (/^(tomorrow|today|tonight|on|at|for|in|next|this|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(tail) && parseWhen(tail)) {
+            title = words.slice(0, i).join(' ');
+            when = tail.replace(/^for /i, '');
+            break;
+          }
+        }
+      }
+      const start = when ? parseWhen(when) : null;
+      if (start) {
+        const nice = title.replace(/^./, (ch) => ch.toUpperCase());
+        this.store.get('events').push({ id: uid(), title: nice, start, end: start + 36e5 });
+        this.store.touch('events');
+        await this.refreshCalendar();
+        return { reply: `${nice}, ${describeWhen(start)}. It's in your calendar.`, tool: did('add_event', `Scheduled “${nice}”`) };
+      }
+    }
+    if ((mm = said.match(/^(?:i(?:'ve| have)? (?:just )?(?:finished|done|completed)|mark|tick off|tick|complete|check off|cross off) (?:the |my )?(.+?)(?: as done| as complete| done| off| from my list| off my list)?$/i)) && !matchHabit(this.store.get('habits'), mm[1])) {
+      const low = mm[1].toLowerCase();
+      const open = this.store.get('tasks').filter((x) => !x.done);
+      const task = open.find((x) => x.title.toLowerCase() === low) ?? open.find((x) => x.title.toLowerCase().includes(low) || low.includes(x.title.toLowerCase())) ?? open.find((x) => low.split(/\s+/).filter((w) => w.length > 3).some((w) => x.title.toLowerCase().includes(w)));
+      if (task) {
+        task.done = true;
+        task.doneAt = Date.now();
+        this.store.touch('tasks');
+        this.patch({ tasks: this.store.get('tasks'), needs: this.needs() });
+        return { reply: `Ticked off: ${task.title.toLowerCase()}.`, tool: did('complete_task', `Completed “${task.title}”`) };
+      }
+    }
+    if ((mm = said.match(/^track (?:my |the |a |an )?(.+?),? (?:at |for |of |which is |its |it's )?[£$€]?(\d+(?:\.\d+)?)(?: pounds| quid| dollars| euros)?(?: (?:a|per|every|each) (month|year|week))?$/i))) {
+      const name = mm[1].replace(/ (subscription|bill)$/i, '').replace(/^./, (ch) => ch.toUpperCase());
+      this.store.get('money').push({ id: uid(), name, amount: +mm[2], every: (mm[3]?.toLowerCase() as 'month' | 'year' | 'week') ?? 'month', kind: /salary|income|wage|pay/i.test(name) ? 'income' : 'bill', at: Date.now() });
+      this.store.touch('money');
+      this.patch({ money: this.store.get('money'), needs: this.needs() });
+      return { reply: `Tracking ${name} at ${s.currency}${mm[2]} a ${mm[3]?.toLowerCase() ?? 'month'}.`, tool: did('add_money', `Tracking ${name}`) };
+    }
+    if ((mm = c.match(/^(?:set |start |give me )?(?:a |an )?timer (?:for |of )?(\d+(?:\.\d+)?|a|an|one|two|three|four|five|ten|fifteen|twenty|thirty|forty five|forty-five|sixty|ninety) (second|minute|hour)s?$/))) {
+      const WORDS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, ten: 10, fifteen: 15, twenty: 20, thirty: 30, 'forty five': 45, 'forty-five': 45, sixty: 60, ninety: 90 };
+      const n = WORDS[mm[1]] ?? parseFloat(mm[1]);
+      return { reply: `${n} ${mm[2]}${n === 1 ? '' : 's'}, starting now.`, tool: await use('set_timer', { minutes: n * (mm[2] === 'second' ? 1 / 60 : mm[2] === 'hour' ? 60 : 1), label: '' }) };
+    }
+    if ((mm = said.match(/^(?:what(?:'s| is)|how(?:'s| is)) the weather (?:like )?(?:in|at|for) (.+?)(?: today| right now| tomorrow)?$/i))) {
+      try {
+        const g = await geocode(this.o.fetch, mm[1]);
+        if (!g) return { reply: `I couldn't find a place called ${mm[1]}.` };
+        return { reply: `In ${g.name} it's ${weatherSentence(await forecast(this.o.fetch, g.lat, g.lon, g.name, s.units))}.` };
+      } catch {
+        return { reply: "I can't reach the weather service right now." };
+      }
     }
 
     // ---- focus sessions
@@ -1252,7 +1470,7 @@ Each request comes with a <context> block. It is your live view of their world: 
     }
     if (/^(whats|what is|what have i got|what do i have|anything|is there anything) on( my calendar)?( for)? (today|tomorrow)$|^whats (on )?(my )?(calendar|schedule|diary)( look like)?( for)?( today| tomorrow)?$|^what does (today|tomorrow) look like$/.test(c.replace(/'/g, ''))) return { reply: this.dayText(/tomorrow/.test(c) ? 1 : 0) };
     if (/^whats (my )?next (meeting|event|appointment|thing)$|^what is (my )?next (meeting|event|appointment)$|^whats next$/.test(c.replace(/'/g, ''))) {
-      const next = this.events.find((e) => e.start > Date.now());
+      const next = this.upcoming().find((e) => e.start > Date.now() && !e.allDay) ?? this.upcoming().find((e) => e.start > Date.now());
       return { reply: next ? `${next.title}, ${describeWhen(next.start)}.` : 'Nothing coming up in your calendar.' };
     }
     if (/^(whats|what is) on my (to ?do )?list$|^what do i (have|need) to do( today)?$|^(read|list|tell me)( me)? my (tasks|to ?dos|reminders|to ?do list|list)$|^whats left to do( today)?$/.test(c.replace(/['-]/g, ''))) {
@@ -1343,9 +1561,32 @@ Each request comes with a <context> block. It is your live view of their world: 
   private speakSeq = new Map<string, number>();
 
   private waiting = new Map<string, string[]>();
+  private cloudDown = '';
+  private voiceStats: { voice: string; rate: number; lastMs: number; lastChars: number } | null = null;
+  /** When the audio already sent will finish playing, and how fast the voice makes audio (seconds of speech per second). */
+  private playEnd = 0;
+  private voiceRate = 3;
 
   /** Synthesize with whichever voice is chosen: one of the Mac's own, or the built-in neural voice. */
   private async synth(text: string, voice: string, speed: number): Promise<string> {
+    const keys = this.store.get('secrets');
+    if (voice.startsWith('eleven:') || voice.startsWith('openai:')) {
+      try {
+        const mp3 = voice.startsWith('eleven:')
+          ? await elevenSpeak(this.o.fetch, keys.elevenKey ?? '', voice.slice(7), text, speed)
+          : await openaiSpeak(this.o.fetch, keys.openaiKey ?? '', voice.slice(7), text, this.settings.assistantName);
+        this.cloudDown = '';
+        return `mp3:${mp3.toString('base64')}`;
+      } catch (err) {
+        // Say why once, then carry on with the built-in voice rather than fall silent.
+        const why = (err as Error).message;
+        if (why !== this.cloudDown) {
+          this.cloudDown = why;
+          this.push({ type: 'notify', title: 'Cloud voice unavailable', body: `${why}. Using the built-in voice for now.` });
+        }
+        voice = DEFAULT_SETTINGS.voice;
+      }
+    }
     if (voice.startsWith('mac:')) {
       try {
         return `24000:${trimPcm(await this.o.mac.speak(voice.slice(4), text, speed)).toString('base64')}`;
@@ -1360,7 +1601,7 @@ Each request comes with a <context> block. It is your live view of their world: 
   }
 
   private canSpeak(): boolean {
-    return this.settings.voice.startsWith('mac:') || this.models.installed('voice');
+    return /^(mac|eleven|openai):/.test(this.settings.voice) || this.models.installed('voice');
   }
 
   /**
@@ -1375,8 +1616,11 @@ Each request comes with a <context> block. It is your live view of their world: 
     this.speakChain = this.speakChain.then(async () => {
       const seq = this.speakSeq.get(turn) ?? 0;
       const queue = this.waiting.get(turn) ?? [];
-      // The opening passage is kept short so speech starts promptly; later ones can run longer.
-      const limit = seq === 0 ? 95 : 300;
+      // How much to say in one breath. The opening is kept short so speech starts promptly. After
+      // that, a passage may only be as long as the voice can produce before what is already
+      // playing runs out; otherwise speech would stop dead while the next passage is made.
+      const lead = Math.max(0, (this.playEnd - Date.now()) / 1000);
+      const limit = seq === 0 ? 110 : Math.max(70, Math.min(320, Math.round(lead * this.voiceRate * 0.7 * 15)));
       const take: string[] = [];
       while (queue.length && (!take.length || take.join(' ').length + queue[0].length < limit)) take.push(queue.shift()!);
       if (!queue.length) this.waiting.delete(turn);
@@ -1389,7 +1633,13 @@ Each request comes with a <context> block. It is your live view of their world: 
         return;
       }
       try {
+        const t0 = Date.now();
         const wav = await this.synth(passage, s.voice, s.speed);
+        // About 15 characters are spoken per second; raw audio tells us exactly.
+        const secs = wav.startsWith('mp3:') ? passage.length / 15 : (wav.length - wav.indexOf(':') - 1) * 0.75 / 2 / (parseInt(wav, 10) || 24000);
+        this.voiceRate = Math.max(0.5, Math.min(40, this.voiceRate * 0.5 + (secs / Math.max(0.05, (Date.now() - t0) / 1000)) * 0.5));
+        this.playEnd = Math.max(Date.now(), this.playEnd) + secs * 1000 + 250;
+        this.voiceStats = { voice: s.voice.split(':')[0].replace(/^[a-z]{2}_.*/, 'built-in'), rate: Math.round(this.voiceRate * 10) / 10, lastMs: Date.now() - t0, lastChars: passage.length };
         // A breath after a sentence, a beat after a clause.
         const gap = /[.!?…]["')\]]?$/.test(passage) ? 280 : /[,;:—–]$/.test(passage) ? 110 : 60;
         this.push({ type: 'audio', turn, seq, wav, text: passage, last: last && !this.waiting.has(turn), gap });
@@ -1425,6 +1675,7 @@ Each request comes with a <context> block. It is your live view of their world: 
     const t0 = Date.now();
     const heard = await this.speech.call<string>('transcribe', { pcm, language: 'en' });
     const asr = Date.now() - t0;
+    this.lastAsr = { ms: asr, secs: pcm.length / 16000 };
     if (!heard || heard.replace(/[^a-z]/gi, '').length < 2) return { heard: '', ignored: true };
     if (opts.needWake) {
       const name = this.settings.assistantName.toLowerCase();
@@ -1447,7 +1698,9 @@ Each request comes with a <context> block. It is your live view of their world: 
     this.activeTurn = turn;
     const chat = this.store.get('chat');
     // Past actions are shown as finished, so an old request is never carried out a second time.
-    const history = chat.slice(-6).map((c) => ({ role: c.role, text: c.tools?.some((t) => t.ok) ? `${c.text} [Already completed: ${c.tools.filter((t) => t.ok).map((t) => t.label).join('; ')}]` : c.text }));
+    // A new question outranks background note-taking.
+    if (this.learning) void this.llm.call('abort', { streamId: this.learning }).catch(() => undefined);
+    const history = chat.slice(-4).map((c) => ({ role: c.role, text: c.tools?.some((t) => t.ok) ? `${c.text.slice(0, 240)} [Already completed: ${c.tools.filter((t) => t.ok).map((t) => t.label).join('; ')}]` : c.text.slice(0, 240) }));
     const userMsg: ChatMsg = { id: uid(), role: 'user', text, at: Date.now(), device: opts.device };
     chat.push(userMsg);
     this.store.touch('chat');
@@ -1480,7 +1733,8 @@ Each request comes with a <context> block. It is your live view of their world: 
     this.patch({ chat: chat.slice(-60) });
     if (this.activeTurn === turn && !speak) this.activeTurn = '';
     // Commands are not facts about the person: only learn from conversation (or an explicit "remember").
-    if (!uses.length || /\bremember\b/i.test(text)) void this.learn(text);
+    // Note-taking waits a moment and gives way to the next question, so it never slows a reply.
+    if (!uses.length || /\bremember\b/i.test(text)) setTimeout(() => this.activeTurn === '' || this.activeTurn === turn ? void this.learn(text) : undefined, 2500);
     return msg;
   }
 
@@ -1496,17 +1750,19 @@ Each request comes with a <context> block. It is your live view of their world: 
       return fast.reply;
     }
     await this.ensureLlm();
-    // Only hand over the web-search tool when the question is about the outside world. Small models
-    // otherwise reach for it on personal questions that the context already answers.
+    // Web search only for questions about the outside world; action tools only for requests to do
+    // something, and then only the two or three the wording points at.
     const outward = /\b(search|look up|google|find out|news|latest|headline|who (is|was|were|won|invented|wrote)|what (is|are|was|were) (the|a|an)\b|when (is|was|did|does)|where (is|are|was)|how (many|much|far|old|tall|long|do|does|did)|price of|score|define|meaning of|capital of)\b/i.test(text) && !/\b(my|mine|me|i|i'm|i've|we|our)\b/i.test(text) && !this.aboutHark(text) && !this.aboutStudy(text) && !/\b(clipboard|copied|pasted)\b/i.test(text);
-    // Questions and chat get no action tools at all, so answering can never have side effects;
-    // only a request to do something unlocks them.
-    const acting = wantsAction(text);
-    const tools = this.tools().filter((t) => (t.name === 'web_search' ? outward : acting));
+    const names = toolsFor(text, wantsAction(text), outward);
+    const tools = this.tools().filter((t) => names.includes(t.name));
+    // Answers drawn from notes, recordings or the clipboard may need a third sentence; chat does not.
+    const maxSentences = this.aboutStudy(text) || this.aboutHark(text) || /\b(clipboard|copied|pasted|explain|summar)/i.test(text) ? 3 : 2;
+    let raw = '';
+    let shown = '';
+    let said = 0; // how much of `shown` has been handed to the voice
     let reply = '';
-    let pending = '';
     let first = true;
-    let spoke = false;
+    let stopped = false;
     // A law question the notes can't answer: say where the answer is coming from before giving it.
     // (Said by Jarvis himself, not left to the model, so it is never skipped.)
     if (this.vocab.size && looksLegal(text) && !studyContext(this.library, this.vocab, text)) {
@@ -1515,21 +1771,39 @@ Each request comes with a <context> block. It is your live view of their world: 
       this.mark(turn, 'think');
       this.push({ type: 'say', turn, delta: lead + reply, state: 'speaking' });
       first = false;
-      if (speak) (void this.speakOut(turn, caveat), (spoke = true));
+      if (speak) void this.speakOut(turn, caveat);
     }
     const before = uses.length;
-    const onChunk = (c: { streamId: string; delta: string }) => {
-      if (c.streamId !== turn || this.activeTurn !== turn) return;
-      reply += c.delta;
-      this.mark(turn, 'think');
-      this.push({ type: 'say', turn, delta: (first ? lead : '') + c.delta, state: 'speaking' });
-      first = false;
+    /** Hand finished sentences to the voice. A very short opener ("Sure.") waits for the next sentence, so speech doesn't start, stall, then start again. */
+    const voice = (final: boolean): void => {
       if (!speak) return;
-      const cut = takeSentences(pending + c.delta);
-      pending = cut.rest;
-      for (const sentence of cut.sentences) (void this.speakOut(turn, sentence), (spoke = true));
+      const cut = takeSentences(shown.slice(said), final);
+      if (!cut.sentences.length) return;
+      if (!final && said === 0 && cut.sentences.length === 1 && cut.sentences[0].length < 28) return;
+      for (const sentence of cut.sentences) void this.speakOut(turn, sentence);
+      said = shown.length - cut.rest.length;
+    };
+    const onChunk = (c: { streamId: string; delta: string }) => {
+      if (c.streamId !== turn || this.activeTurn !== turn || stopped) return;
+      raw += c.delta;
+      let next = visibleText(raw);
+      // Enough has been said: stop the model there rather than let it ramble.
+      const whole = takeSentences(next);
+      if (whole.sentences.length >= maxSentences) {
+        next = whole.sentences.slice(0, maxSentences).join(' ');
+        stopped = true;
+        void this.llm.call('abort', { streamId: turn }).catch(() => undefined);
+      }
+      if (next.length <= shown.length) return;
+      const delta = next.slice(shown.length);
+      shown = next;
+      this.mark(turn, 'think');
+      this.push({ type: 'say', turn, delta: (first ? lead : '') + delta, state: 'speaking' });
+      first = false;
+      voice(stopped);
     };
     const done = new Set<string>();
+    let calls = 0;
     const onTool = async (c: { streamId: string; callId: string; name: string; args: any }) => {
       if (c.streamId !== turn) return;
       const tool = tools.find((t) => t.name === c.name);
@@ -1537,13 +1811,14 @@ Each request comes with a <context> block. It is your live view of their world: 
       let ok = false;
       const sig = `${c.name}:${JSON.stringify(c.args ?? {})}`;
       try {
-        if (tool && done.has(sig)) {
-          // The model repeated itself. Don't act twice.
-          await this.llm.call('toolResult', { callId: c.callId, result: 'That was already done a moment ago.' }).catch(() => undefined);
+        // One request, one or two actions: a model that keeps reaching for tools is stopped, not obeyed.
+        if (!tool || done.has(sig) || ++calls > 2) {
+          await this.llm.call('toolResult', { callId: c.callId, result: done.has(sig) ? 'That was already done a moment ago.' : 'No further actions are needed. Reply to the user now.' }).catch(() => undefined);
           return;
         }
         done.add(sig);
-        if (tool) (result = await tool.run(c.args ?? {})), (ok = true);
+        result = await tool.run(c.args ?? {});
+        ok = true;
       } catch (err) {
         result = `That failed: ${(err as Error).message}`;
       }
@@ -1561,24 +1836,23 @@ Each request comes with a <context> block. It is your live view of their world: 
         history,
         prompt: `<context>\n${await this.context(text)}\n</context>\n\n${text}`,
         ...(tools.length ? { tools: tools.map(({ name, description, params }) => ({ name, description, params })) } : {}),
-        maxTokens: 260,
+        maxTokens: 160,
         temperature: 0.5,
       });
-      if (final && final.length > reply.trim().length && !reply.trim()) {
-        reply = final;
-        this.push({ type: 'say', turn, delta: lead + final, state: 'speaking' });
-        pending = final;
+      if (!shown.trim() && !stopped && final) {
+        shown = takeSentences(visibleText(final), true).sentences.slice(0, maxSentences).join(' ');
+        if (shown) this.push({ type: 'say', turn, delta: (first ? lead : '') + shown, state: 'speaking' });
       }
     } finally {
       this.llm.off('chunk', onChunk);
       this.llm.off('tool', onTool);
     }
-    if (!reply.trim()) {
-      reply = uses.length > before && uses.slice(before).some((u) => u.ok) ? 'Done.' : "I'm not sure what to say to that.";
-      this.push({ type: 'say', turn, delta: lead + reply, state: 'speaking' });
-      pending = reply;
+    if (!shown.trim()) {
+      shown = uses.length > before && uses.slice(before).some((u) => u.ok) ? 'Done.' : reply ? '' : "Sorry, I didn't catch that properly. Could you say it another way?";
+      if (shown) this.push({ type: 'say', turn, delta: (first ? lead : '') + shown, state: 'speaking' });
     }
-    if (speak && pending.trim()) void this.speakOut(turn, pending);
+    voice(true);
+    reply += shown;
     return reply.replace(/\s*\n+\s*/g, ' ').trim();
   }
 
@@ -1590,7 +1864,7 @@ Each request comes with a <context> block. It is your live view of their world: 
     const P: string[] = [`Good ${h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening'}, ${this.you()}. It's ${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}.`];
     if (this.weather) P.push(`It's ${weatherSentence(this.weather)}.`);
     const end = new Date().setHours(23, 59, 59, 999);
-    const today = this.events.filter((e) => e.start <= end && e.end > now.getTime());
+    const today = this.events.filter((e) => !eventOver(e) && e.start <= end && e.end > now.getTime());
     if (today.length) P.push(`You have ${today.length} thing${today.length === 1 ? '' : 's'} on today: ${today.slice(0, 4).map((e) => `${e.title}${e.allDay ? '' : ' at ' + new Date(e.start).toLocaleTimeString('en-GB', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(':00', '').replace(' ', '')}`).join(', ')}.`);
     else P.push('Your calendar is clear today.');
     const open = this.store.get('tasks').filter((t) => !t.done);
@@ -1646,6 +1920,33 @@ Each request comes with a <context> block. It is your live view of their world: 
     briefing: () => void this.briefing(),
     previewVoice: (p: { voice: string }) => this.previewVoice(p.voice),
     macVoices: () => this.o.mac.voices().catch(() => []),
+    /** Which cloud voices are set up, and the voices each offers. */
+    cloudVoices: async () => {
+      const k = this.store.get('secrets');
+      const out: { eleven: CloudVoice[] | null; openai: CloudVoice[] | null; error?: string } = { eleven: null, openai: k.openaiKey ? OPENAI_VOICES : null };
+      if (k.elevenKey) {
+        try {
+          out.eleven = await elevenVoices(this.o.fetch, k.elevenKey);
+        } catch (err) {
+          out.eleven = [];
+          out.error = (err as Error).message;
+        }
+      }
+      return out;
+    },
+    /** Save (or, with an empty key, remove) a cloud voice key, after checking it works. */
+    saveVoiceKey: async (p: { provider: 'eleven' | 'openai'; key: string }) => {
+      const key = String(p.key ?? '').trim();
+      const field = p.provider === 'eleven' ? 'elevenKey' : 'openaiKey';
+      if (!key) {
+        this.store.set('secrets', { ...this.store.get('secrets'), [field]: undefined });
+        if (this.settings.voice.startsWith(`${p.provider}:`)) this.patchSettings({ voice: DEFAULT_SETTINGS.voice });
+        return { ok: true, voices: [] };
+      }
+      const voices = p.provider === 'eleven' ? await elevenVoices(this.o.fetch, key) : (await openaiCheck(this.o.fetch, key), OPENAI_VOICES);
+      this.store.set('secrets', { ...this.store.get('secrets'), [field]: key });
+      return { ok: true, voices };
+    },
     clearChat: () => (this.store.set('chat', []), this.patch({ chat: [] })),
     addTask: (p: { title: string; when?: string }) => this.tools().find((t) => t.name === 'add_task')!.run(p),
     updateTask: (p: { id: string; patch: Partial<Task> }) => {
@@ -1688,7 +1989,9 @@ Each request comes with a <context> block. It is your live view of their world: 
     },
     runShortcut: (p: { name: string }) => this.o.mac.runShortcut(p.name),
     allShortcuts: () => this.o.mac.shortcuts().catch(() => []),
-    refresh: () => Promise.all([this.refreshWeather(), this.refreshMail(), this.refreshCalendar(), this.refreshMusic(), this.refreshHome()]).then(() => true),
+    refresh: () => this.refreshAll(),
+    openUrl: (p: { url: string }) => (/^https:\/\/(myaccount\.google\.com|elevenlabs\.io|platform\.openai\.com|support\.google\.com)\//.test(String(p.url)) ? this.o.mac.openUrl(String(p.url)) : undefined),
+    diagnose: () => this.diagnose(),
     downloadModel: (p: { id: string }) => void this.models.download(p.id),
     cancelDownload: (p: { id: string }) => this.models.cancel(p.id),
     tapHome: async (p: { id: string }) => {

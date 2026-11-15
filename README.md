@@ -11,7 +11,7 @@ no subscription, no usage limits, and nothing you say is uploaded.
 | | |
 |---|---|
 | **Talk** | Hold the space bar (or hold the glowing core) and speak. Or switch on **hands-free** and just say “Jarvis, …”. Replies are spoken in a neural British voice (ten voices to choose from), streamed sentence by sentence. Esc interrupts |
-| **Voices** | Twelve built-in neural voices, including blends of two voices, spoken in flowing passages rather than sentence by sentence. Or use one of your Mac's own voices: download a free Premium voice in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices and pick it in Settings → Voice |
+| **Voices** | Twelve built-in neural voices (including blends), your Mac's own Premium voices, or, for the most lifelike sound, an optional cloud voice from ElevenLabs or OpenAI using your own key (each reply's words are then sent to that provider to be spoken; everything else stays on the Mac). Speech is paced so it never starts, stalls and restarts |
 | **Remembers you** | Say “remember that…” or just talk: he quietly notes lasting things (who people are, what you like, where you need to be) and recalls the relevant ones by meaning in later conversations. Review, pin or delete anything in **Memory** |
 | **Daily briefing** | “Brief me”: weather, today's calendar, what is due, unread mail, bills about to go out. Built from real data, never invented |
 | **Reminders and tasks** | “Remind me to call the dentist tomorrow at 9.” Spoken reminder and notification when it is due. Now / Week / Later views |
@@ -75,6 +75,10 @@ Your phone talks to the Mac, which does the thinking, so:
 Your data (memory, tasks, notes, chat) is plain JSON in
 `~/Library/Application Support/jarvis/data`. Settings → Your data exports or imports
 everything in one file.
+
+## If something is slow or broken
+
+Settings → **Health check** → *Run a health check* produces a short report (which engine the model runs on, how long each reply took to read, think and speak, what is connected, the raw calendar and music state, and any errors). Copy it into a message when asking for help. The round arrow in the top bar refreshes calendar, mail, music, weather, home and revision at once; Jarvis also refreshes by himself on waking from sleep and at midnight.
 
 ## Honest limits
 

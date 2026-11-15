@@ -110,6 +110,7 @@ export function connect(): void {
       return;
     }
     const p = msg as Push;
+    if (p.type === 'summon') return void pushHandlers.forEach((f) => f(p));
     if (p.type === 'patch') set((s) => (s.snap ? { snap: { ...s.snap, ...p.data } } : {}));
     else if (p.type === 'say') {
       set((s) => {

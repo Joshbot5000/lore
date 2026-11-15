@@ -23,9 +23,11 @@ export async function fetchUnread(acc: MailLogin, limit = 8): Promise<{ unread: 
   try {
     await client.connect();
   } catch (err) {
-    const e = err as { authenticationFailed?: boolean; code?: string; message: string };
-    if (e.authenticationFailed) throw new Error('the mail server refused the password (most providers need an app password)');
-    throw new Error(/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timeout|EHOSTUNREACH/i.test(`${e.code} ${e.message}`) ? `can't reach ${acc.host}` : e.message);
+    const e = err as { authenticationFailed?: boolean; code?: string; message: string; response?: string; responseText?: string; serverResponseCode?: string };
+    const said = `${e.responseText ?? ''} ${e.response ?? ''}`.replace(/\s+/g, ' ').trim();
+    if (/application-specific password required/i.test(said)) throw new Error('Google wants an app password here, not your normal Google password. Create one at myaccount.google.com/apppasswords (2-Step Verification must be on) and paste the 16 letters it gives you');
+    if (e.authenticationFailed || /AUTHENTICATIONFAILED|invalid credentials/i.test(said)) throw new Error(`the mail server refused the password${/gmail|google/i.test(acc.host) ? '. For Gmail this must be a 16-letter app password from myaccount.google.com/apppasswords, typed without mistakes; your normal Google password will not work' : ' (most providers need an app password)'}${said ? ` [server said: ${said.slice(0, 140)}]` : ''}`);
+    throw new Error(/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|timeout|EHOSTUNREACH/i.test(`${e.code} ${e.message}`) ? `can't reach ${acc.host} (check the internet connection)` : `${e.message}${said ? ` [server said: ${said.slice(0, 140)}]` : ''}`);
   }
   try {
     const lock = await client.getMailboxLock('INBOX', { readOnly: true });

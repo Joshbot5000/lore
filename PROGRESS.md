@@ -65,3 +65,30 @@ then tests/chat.mjs, tests/voice.mjs, tests/look.mjs against the printed address
       Mac system voices via `say` (src/brain/mac.ts voices/speak) selectable in Settings.
       Nobody has listened to any of this: the build container has no audio. Voice choice has to be made by ear
       on his Mac. Not done, needs his decision: a cloud voice (needs an account/key, sends replies off the Mac).
+
+- [x] Round 6 (15 Nov): Josh's report from real use on his M1/8 GB (model = qwen-2b): replies took ~12 s, speech
+      started then stalled, voice robotic, Gmail would not add, a past all-day event still showed, Spotify card
+      said nothing playing while controls worked.
+      * ROOT CAUSE of the delay (measured with the new per-reply stats in src/workers/llm.ts): any request that
+        "wants an action" sent all 14 tool schemas (2,600 tokens to read) and the 2B model then wrote 260 tokens,
+        leaked <think>, and called several wrong tools. Plain questions read 500-900 tokens and rambled.
+        Fix: everyday commands are handled directly in quick() (open, volume, mute, lock, dark mode, schedule,
+        tick off, track money, timers, weather elsewhere, greetings...); the model gets at most 3 tools chosen by
+        wording (toolsFor), max 2 tool calls, a short persona, only the context sections the question touches
+        (relevant), 4 messages of history, <think> stripped (visibleText), and is stopped after 2 sentences.
+        Now ~250-300 tokens read, ~30 written. Note-taking (learn) is deferred and aborted by a new question.
+      * Speech stall: a short first sentence was spoken alone and the long next passage took longer to make than
+        the first took to play. Fix: short openers wait for the next sentence; passage length is limited by how
+        much audio is already queued and the measured speed of the voice (playEnd/voiceRate in speakOut).
+      * Cloud voices: src/brain/cloudvoice.ts (ElevenLabs flash v2.5, OpenAI gpt-4o-mini-tts), MP3 decoded in the
+        browser; keys in secrets.json; falls back to the built-in voice with a notice if the provider fails.
+      * Spotify: status script rewritten (each property in its own try, player state compared as a constant,
+        newline-separated). The old `player state as string` is the suspected cause. Polls every 2.5 s.
+      * Calendar: Apple Calendar is now read from the start of today (was: events starting after now, which
+        dropped today's all-day and in-progress events); all-day events judged by date (eventOver); feed
+        fetches time out; refresh on wake, at midnight, every 5 min, and by a button. CAUSE OF HIS STALE
+        EVENT NOT CONFIRMED: the health check prints raw event times so it can be seen if it recurs.
+      * Gmail: server's own refusal text is shown; step-by-step with links; Apple Mail fallback explained.
+        Cause not confirmed (most likely a normal password instead of an app password).
+      * Settings -> Health check (brain.diagnose()) for copy-paste diagnostics.
+      Tests: home.mjs 54, life.mjs 25, study.mjs 20, unit 34. Still untested on real hardware/services.

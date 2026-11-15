@@ -304,3 +304,59 @@ describe('revision', () => {
     for (const q of ["what's the weather like", 'remind me to call mum', 'what time is my seminar tomorrow', 'play some jazz', 'how are my habits going']) expect(studyContext(lib, v, q)).toBe('');
   });
 });
+
+import { relevant, toolsFor, visibleText, trimPcm } from '../src/brain/brain';
+import { parseMusic, parseSayVoices, wavSamples } from '../src/brain/mac';
+import { eventOver } from '../src/shared/when';
+describe('quick and correct replies', () => {
+  it('hides a model\'s private reasoning, even mid-stream', () => {
+    expect(visibleText('<think>the user wants safari</think>Opening Safari.')).toBe('Opening Safari.');
+    expect(visibleText('<think>still thinking about')).toBe('');
+    expect(visibleText('Hello <thi')).toBe('Hello ');
+    expect(visibleText('Sure. <think>hmm</think> Done.')).toBe('Sure.  Done.');
+    expect(visibleText('2 < 3 is true')).toBe('2 < 3 is true');
+  });
+  it('gives the model only the tools a request points at', () => {
+    expect(toolsFor('Open Safari for me', true, false)).toEqual(['open_app_or_website']);
+    expect(toolsFor('remind me to water the plants', true, false)).toEqual(['add_task']);
+    expect(toolsFor('How should I spend this evening?', false, false)).toEqual([]);
+    expect(toolsFor('Who won the 1966 World Cup?', false, true)).toEqual(['web_search']);
+    expect(toolsFor('set a timer and play some music and open mail and lock the screen', true, false).length).toBeLessThanOrEqual(3);
+  });
+  it('only shows the model the parts of the day a question is about', () => {
+    const on = (q: string) => Object.entries(relevant(q)).filter(([, v]) => v).map(([k]) => k);
+    expect(on('tell me a joke')).toEqual([]);
+    expect(on('do I need a coat?')).toEqual(['weather']);
+    expect(on('how should I spend this evening?')).toEqual(['weather', 'calendar', 'tasks']);
+    expect(on('what did that email from Sam say')).toEqual(['mail']);
+    expect(on('can I afford another subscription')).toEqual(['money']);
+  });
+});
+describe('calendar, music and voices on the Mac', () => {
+  const at = (d: number, h = 0, m = 0) => new Date(2026, 10, d, h, m).getTime();
+  it('drops an all-day event once its day has passed, however the end is written', () => {
+    const now = at(15, 9);
+    expect(eventOver({ start: at(14), end: at(15), allDay: true }, now)).toBe(true); // ends at midnight
+    expect(eventOver({ start: at(14), end: at(14, 23, 59), allDay: true }, now)).toBe(true); // ends 23:59
+    expect(eventOver({ start: at(14), end: at(15, 1), allDay: true }, now)).toBe(true); // shifted by a time zone
+    expect(eventOver({ start: at(15), end: at(16), allDay: true }, now)).toBe(false); // today
+    expect(eventOver({ start: at(14), end: at(17), allDay: true }, now)).toBe(false); // spans today
+    expect(eventOver({ start: at(15), end: at(15), allDay: true }, now)).toBe(false); // zero length, today
+    expect(eventOver({ start: at(15, 8), end: at(15, 8, 30) }, now)).toBe(true);
+    expect(eventOver({ start: at(15, 8), end: at(15, 10) }, now)).toBe(false);
+  });
+  it('reads what is playing', () => {
+    expect(parseMusic('Spotify', 'off')).toBeNull();
+    expect(parseMusic('Spotify', 'playing\nBlinding Lights\nThe Weeknd\nAfter Hours\nhttps://i.scdn.co/image/x\n42,5\n200040\n63')).toEqual({ app: 'Spotify', state: 'playing', title: 'Blinding Lights', artist: 'The Weeknd', album: 'After Hours', art: 'https://i.scdn.co/image/x', position: 42.5, duration: 200.04, volume: 63 });
+    expect(parseMusic('Music', 'paused\nSong\nBand\n\n\n10\n185.3\n40')).toMatchObject({ state: 'paused', title: 'Song', duration: 185.3, art: undefined });
+    expect(parseMusic('Spotify', 'paused\n\n\n\n\n0\n0\n50')).toEqual({ app: 'Spotify', state: 'stopped', volume: 50 });
+  });
+  it('lists Mac voices and reads their audio', () => {
+    expect(parseSayVoices('Albert              en_US    # Hello\nJamie (Premium)     en_GB    # Hello\nAmélie              fr_CA    # Bonjour').map((v) => v.id)).toEqual(['mac:Jamie (Premium)', 'mac:Albert']);
+    const wav = Buffer.concat([Buffer.from('RIFF\0\0\0\0WAVEfmt \x10\0\0\0', 'latin1'), Buffer.alloc(16), Buffer.from('LIST\x04\0\0\0abcddata\x06\0\0\0', 'latin1'), Buffer.from([1, 0, 2, 0, 3, 0])]);
+    expect([...wavSamples(wav)]).toEqual([1, 0, 2, 0, 3, 0]);
+    const pcm = Buffer.alloc(24000 * 2);
+    for (let i = 6000; i < 12000; i++) pcm.writeInt16LE(8000, i * 2);
+    expect(trimPcm(pcm).length / 2).toBeLessThan(7500);
+  });
+});

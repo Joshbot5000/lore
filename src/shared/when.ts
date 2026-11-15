@@ -112,3 +112,17 @@ export function speakable(text: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/**
+ * Has this event finished? Timed events end at their end time. All-day events are judged by date:
+ * they are over once their last day has passed, however the calendar chose to write the end time
+ * (midnight after the last day, 23:59 on it, or shifted by a time zone).
+ */
+export function eventOver(e: { start: number; end: number; allDay?: boolean }, now = Date.now()): boolean {
+  if (!e.allDay) return e.end <= now;
+  const end = new Date(Math.max(e.end, e.start + 1));
+  // An end at (or within a few hours after) midnight means "up to the end of the previous day".
+  const last = end.getHours() < 6 ? new Date(end.getFullYear(), end.getMonth(), end.getDate() - 1) : new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  const lastDay = Math.max(last.getTime(), new Date(new Date(e.start).getFullYear(), new Date(e.start).getMonth(), new Date(e.start).getDate()).getTime());
+  return lastDay < new Date(new Date(now).getFullYear(), new Date(now).getMonth(), new Date(now).getDate()).getTime();
+}

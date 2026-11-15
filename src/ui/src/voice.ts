@@ -54,6 +54,8 @@ function settle(): void {
   if (get().mode === 'speaking') set({ mode: 'idle' });
 }
 
+let decoding: Promise<void> = Promise.resolve();
+
 function playPcm(rate: number, b64: string, gap = 60): void {
   const c = audio();
   const bin = atob(b64);
@@ -65,6 +67,11 @@ function playPcm(rate: number, b64: string, gap = 60): void {
   }
   const ab = c.createBuffer(1, n, rate);
   ab.getChannelData(0).set(f32);
+  playBuffer(ab, gap);
+}
+
+function playBuffer(ab: AudioBuffer, gap = 60): void {
+  const c = audio();
   const src = c.createBufferSource();
   src.buffer = ab;
   src.connect(analyser!);
@@ -115,7 +122,21 @@ export function initVoice(): void {
       }
       if (p.wav) {
         const i = p.wav.indexOf(':');
-        playPcm(+p.wav.slice(0, i), p.wav.slice(i + 1), p.gap);
+        const kind = p.wav.slice(0, i), data = p.wav.slice(i + 1), gap = p.gap, turn = p.turn;
+        // Clips are decoded one after another so they always play in the order they were sent.
+        decoding = decoding.then(async () => {
+          if (turn !== lastTurn && !turn.startsWith('n')) return; // a newer reply has taken over
+          if (kind === 'mp3') {
+            try {
+              const bin = atob(data);
+              const bytes = new Uint8Array(bin.length);
+              for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+              playBuffer(await audio().decodeAudioData(bytes.buffer), gap);
+            } catch {
+              /* an undecodable clip is skipped rather than stalling the rest */
+            }
+          } else playPcm(+kind, data, gap);
+        });
       } else if (p.last) setTimeout(settle, 50);
     } else if (p.type === 'say' && p.done) {
       const s = get();
