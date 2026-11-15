@@ -52,6 +52,11 @@ function findNode(): string | null {
   return null;
 }
 let nodeBin: string | null | undefined;
+/**
+ * All three engines (mind, ears, voice) run as plain Node programs when Node is installed. Besides
+ * the memory-allocator reason above, macOS treats an app's helper processes as low priority and
+ * parks them on the slow efficiency cores, which made speech several times slower than it should be.
+ */
 const forkLlm = (script: string, name: string) => {
   if (nodeBin === undefined) nodeBin = findNode();
   if (!nodeBin) return fork(script, name);
@@ -137,6 +142,11 @@ function makeTray(brain: Brain): void {
   }
 }
 
+// Keep the interface and its audio at full speed when the window is not in front.
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => {
@@ -145,7 +155,7 @@ else {
   });
   void app.whenReady().then(async () => {
     const brain = new Brain({
-      dataDir, modelsDir, fork: fork as never, forkLlm: forkLlm as never, fetch: (u, init) => net.fetch(u, init as never), mac: pickMac(), version: app.getVersion(),
+      dataDir, modelsDir, fork: (process.env.JARVIS_ENGINES === 'electron' ? fork : forkLlm) as never, forkLlm: forkLlm as never, fetch: (u, init) => net.fetch(u, init as never), mac: pickMac(), version: app.getVersion(),
       port: Number(process.env.JARVIS_PORT || 7717),
       notify: (title, body) => Notification.isSupported() && new Notification({ title, body, silent: true }).show(),
     });

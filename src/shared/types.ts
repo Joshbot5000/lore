@@ -26,9 +26,9 @@ export type ChatMsg = { id: string; role: 'user' | 'assistant'; text: string; at
 export type Timing = { asr?: number; think?: number; voice?: number; total?: number };
 export type ToolUse = { name: string; label: string; ok: boolean };
 
-export type CalEvent = { id: string; title: string; start: number; end: number; allDay?: boolean; where?: string; calendar?: string };
-export type Mail = { id: string; from: string; subject: string; at: number; preview?: string };
-export type NowPlaying = { app: string; state: 'playing' | 'paused' | 'stopped'; title?: string; artist?: string; album?: string; art?: string; position?: number; duration?: number; volume?: number };
+export type CalEvent = { id: string; title: string; start: number; end: number; allDay?: boolean; where?: string; calendar?: string; source?: 'apple' | 'google' | 'feed' | 'jarvis' };
+export type Mail = { id: string; from: string; subject: string; at: number; preview?: string; /** Opens this exact message (in Gmail or the Mail app). */ link?: string };
+export type NowPlaying = { app: string; state: 'playing' | 'paused' | 'stopped'; title?: string; artist?: string; album?: string; art?: string; /** The track's address in Spotify. */ uri?: string; position?: number; duration?: number; volume?: number };
 export type Weather = {
   place: string; at: number; temp: number; feels: number; code: number; label: string; wind: number; rain: number; isDay: boolean;
   days: { date: string; hi: number; lo: number; code: number; label: string; rain: number }[];

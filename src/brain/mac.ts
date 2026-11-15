@@ -11,6 +11,8 @@ import type { CalEvent, MacVoice, Mail, NowPlaying } from '../shared/types';
 
 export type MacBridge = {
   real: boolean;
+  /** (Test double only) what has been opened. */
+  opened?: string[];
   music(app: 'Spotify' | 'Music'): Promise<NowPlaying | null>;
   /** Play a specific thing: a spotify: address in Spotify, or something from the library by name in Music. True if it started. */
   playMusic(app: 'Spotify' | 'Music', what: string): Promise<boolean>;
@@ -24,6 +26,10 @@ export type MacBridge = {
   setVolume(percent: number): Promise<void>;
   battery(): Promise<{ percent: number; charging: boolean } | null>;
   system(action: 'lock' | 'sleep-display' | 'dark-mode' | 'dark-on' | 'dark-off' | 'mute' | 'unmute' | 'louder' | 'quieter'): Promise<void>;
+  /** Bring an event up in the Calendar app. False if it could not be found there. */
+  showEvent(uid: string): Promise<boolean>;
+  /** Bring an app to the front. */
+  activate(name: string): Promise<void>;
   /** English voices installed on this Mac, best first. */
   voices(): Promise<MacVoice[]>;
   /** Speak with one of the Mac's own voices. Returns 24 kHz 16-bit mono samples. */
@@ -46,51 +52,17 @@ export const realMac: MacBridge = {
   real: true,
 
   async music(app) {
-    // Every property is read on its own, so one that this version of the app lacks (or a track
-    // that has none, such as an advert or a local file) cannot hide the rest. The player state is
-    // compared as a constant: turning it into text is unreliable from a script run this way.
-    const out = await osa(`if application ${q(app)} is running then
-  tell application ${q(app)}
-    set st to "paused"
-    try
-      if player state is playing then
-        set st to "playing"
-      else if player state is stopped then
-        set st to "stopped"
-      end if
-    end try
-    set ti to ""
-    set ar to ""
-    set al to ""
-    set art to ""
-    set po to "0"
-    set du to "0"
-    set vo to "0"
-    try
-      set ti to (name of current track) as text
-    end try
-    try
-      set ar to (artist of current track) as text
-    end try
-    try
-      set al to (album of current track) as text
-    end try
-    ${app === 'Spotify' ? 'try\n      set art to (artwork url of current track) as text\n    end try' : ''}
-    try
-      set po to (player position) as text
-    end try
-    try
-      set du to (duration of current track) as text
-    end try
-    try
-      set vo to (sound volume) as text
-    end try
-    return st & linefeed & ti & linefeed & ar & linefeed & al & linefeed & art & linefeed & po & linefeed & du & linefeed & vo
-  end tell
-else
-  return "off"
-end if`);
-    return parseMusic(app, out);
+    // First choice: JavaScript for Automation. Second: AppleScript with long, unmistakable names
+    // (short ones such as "st" are reserved words in AppleScript and stop the whole script compiling).
+    try {
+      return parseMusicJson(app, await run('osascript', ['-l', 'JavaScript', '-e', musicJxa(app)]));
+    } catch (first) {
+      try {
+        return parseMusic(app, await osa(musicAppleScript(app)));
+      } catch (second) {
+        throw new Error(`${(second as Error).message} (and: ${(first as Error).message})`);
+      }
+    }
   },
 
   async playMusic(app, what) {
@@ -137,7 +109,11 @@ end tell`, 20000);
     if c > 12 then set c to 12
     repeat with i from 1 to c
       set m to item i of msgs
-      set out to out & (id of m) & f & (sender of m) & f & (subject of m) & f & ((date received of m) as «class isot» as string) & r
+      set messageKey to ""
+      try
+        set messageKey to (message id of m) as text
+      end try
+      set out to out & (id of m) & f & (sender of m) & f & (subject of m) & f & ((date received of m) as «class isot» as string) & f & messageKey & r
     end repeat
     return (n as string) & r & out
   end tell
@@ -151,8 +127,9 @@ end if`,
     return {
       unread: parseInt(n, 10) || 0,
       items: rows.filter(Boolean).map((row) => {
-        const [id, from, subject, date] = row.split(F);
-        return { id, from: from.replace(/\s*<[^>]+>\s*$/, '').replace(/^"|"$/g, '') || from, subject, at: Date.parse(date) || Date.now() };
+        const [id, from, subject, date, key] = row.split(F);
+        // message: links open that exact email in the Mail app.
+        return { id, from: from.replace(/\s*<[^>]+>\s*$/, '').replace(/^"|"$/g, '') || from, subject, at: Date.parse(date) || Date.now(), link: key ? `message://%3C${encodeURIComponent(key.replace(/^<|>$/g, ''))}%3E` : undefined };
       }),
     };
   },
@@ -178,9 +155,27 @@ end tell`,
     );
     return out.split(R).filter(Boolean).map((row) => {
       const [id, title, start, end, allDay, calendar] = row.split(F);
-      return { id, title, start: Date.parse(start), end: Date.parse(end), allDay: allDay === 'true', calendar };
+      return { id, title, start: Date.parse(start), end: Date.parse(end), allDay: allDay === 'true', calendar, source: 'apple' as const };
     }).filter((e) => !Number.isNaN(e.start));
   },
+
+  async showEvent(uid) {
+    const found = await osa(`tell application "Calendar"
+  activate
+  repeat with oneCalendar in calendars
+    try
+      set matchingEvents to (every event of oneCalendar whose uid is ${q(uid)})
+      if (count of matchingEvents) > 0 then
+        show (item 1 of matchingEvents)
+        return "shown"
+      end if
+    end try
+  end repeat
+  return "missing"
+end tell`, 30000);
+    return found === 'shown';
+  },
+  activate: async (name) => void (await run('open', ['-a', name])),
 
   shortcuts: async () => (await run('shortcuts', ['list'])).split('\n').map((s) => s.trim()).filter(Boolean),
   runShortcut: async (name) => void (await run('shortcuts', ['run', name], 60000)),
@@ -233,6 +228,7 @@ export function fakeMac(): MacBridge {
   const tracks = [['Midnight City', 'M83', "Hurry Up, We're Dreaming"], ['Intro', 'The xx', 'xx'], ['Time', 'Hans Zimmer', 'Inception']];
   let i = 0, state: NowPlaying['state'] = 'paused', volume = 55, started = now();
   let clip = process.env.JARVIS_FAKE_CLIPBOARD ?? '';
+  const opened: string[] = [];
   const day = (d: number, h: number, m = 0) => {
     const t = new Date();
     t.setDate(t.getDate() + d);
@@ -241,7 +237,7 @@ export function fakeMac(): MacBridge {
   };
   return {
     real: false,
-    music: async (app) => ({ app, state, title: tracks[i][0], artist: tracks[i][1], album: tracks[i][2], position: state === 'playing' ? ((now() - started) / 1000) % 240 : 42, duration: 240, volume }),
+    music: async (app) => ({ app, state, uri: 'spotify:track:4iV5W9uYEdYUVa79Axb7Rh', title: tracks[i][0], artist: tracks[i][1], album: tracks[i][2], position: state === 'playing' ? ((now() - started) / 1000) % 240 : 42, duration: 240, volume }),
     async playMusic(_app, what) {
       tracks.push([what.startsWith('spotify:') ? `Played ${what}` : what, 'Test artist', 'Test album']);
       i = tracks.length - 1;
@@ -261,23 +257,26 @@ export function fakeMac(): MacBridge {
     mail: async () => ({
       unread: 3,
       items: [
-        { id: '1', from: 'Dr Patel', subject: 'Seminar moved to Thursday 2pm', at: now() - 36e5 },
+        { id: '1', from: 'Dr Patel', subject: 'Seminar moved to Thursday 2pm', at: now() - 36e5, link: 'message://%3Cabc%40uni.example%3E' },
         { id: '2', from: 'Octopus Energy', subject: 'Your November statement is ready', at: now() - 5 * 36e5 },
         { id: '3', from: 'Sam', subject: 'Five-a-side on Sunday?', at: now() - 9 * 36e5 },
       ],
     }),
     calendar: async () => [
-      { id: 'e1', title: 'Contract law seminar', start: day(0, 14), end: day(0, 15, 30), calendar: 'Uni' },
+      { id: 'e1', title: 'Contract law seminar', start: day(0, 14), end: day(0, 15, 30), calendar: 'Uni', source: 'apple' },
       { id: 'e2', title: 'Gym', start: day(1, 7, 30), end: day(1, 8, 30), calendar: 'Home' },
       { id: 'e3', title: 'Dinner with family', start: day(2, 18, 45), end: day(2, 21), calendar: 'Home' },
     ],
     shortcuts: async () => ['Lounge lights', 'Movie night', 'Good night', 'Heating boost'],
     runShortcut: async () => undefined,
-    openApp: async () => undefined,
-    openUrl: async () => undefined,
+    openApp: async (name) => void opened.push(`app:${name}`),
+    openUrl: async (url) => void opened.push(url),
+    opened,
     setVolume: async (p) => void (volume = p),
     battery: async () => ({ percent: 82, charging: false }),
     system: async () => undefined,
+    showEvent: async (uid) => (opened.push(`event:${uid}`), true),
+    activate: async (name) => void opened.push(`app:${name}`),
     voices: async () => parseSayVoices('Daniel              en_GB    # Hello! My name is Daniel.\nJamie (Premium)     en_GB    # Hello! My name is Jamie.\nSerena (Enhanced)   en_GB    # Hello! My name is Serena.\nThomas              fr_FR    # Bonjour!\nZoe (Premium)       en_US    # Hello! My name is Zoe.'),
     async speak(_voice, text) {
       // A tone, padded with silence the way real voices are, so trimming can be tested.
@@ -291,15 +290,77 @@ export function fakeMac(): MacBridge {
   };
 }
 
+/** What is playing, asked in JavaScript for Automation. Each property is read on its own so one failure cannot hide the rest. */
+export function musicJxa(app: 'Spotify' | 'Music'): string {
+  return `(function () {
+  var app = Application(${JSON.stringify(app)});
+  if (!app.running()) return JSON.stringify({ off: true });
+  function get(f, d) { try { var v = f(); return v === undefined || v === null ? d : v; } catch (e) { return d; } }
+  var t = app.currentTrack;
+  return JSON.stringify({
+    state: String(get(function () { return app.playerState(); }, 'paused')),
+    title: String(get(function () { return t.name(); }, '')),
+    artist: String(get(function () { return t.artist(); }, '')),
+    album: String(get(function () { return t.album(); }, '')),
+    art: String(get(function () { return ${app === 'Spotify' ? 't.artworkUrl()' : "''"}; }, '')),
+    uri: String(get(function () { return ${app === 'Spotify' ? 't.id()' : "''"}; }, '')),
+    position: Number(get(function () { return app.playerPosition(); }, 0)),
+    duration: Number(get(function () { return t.duration(); }, 0)),
+    volume: Number(get(function () { return app.soundVolume(); }, 0))
+  });
+})()`;
+}
+
+export function musicAppleScript(app: 'Spotify' | 'Music'): string {
+  const read = (variable: string, expr: string): string => `    try\n      set ${variable} to (${expr}) as text\n    end try`;
+  return `if application ${q(app)} is running then
+  tell application ${q(app)}
+    set playerStatus to "paused"
+    set trackTitle to ""
+    set trackArtist to ""
+    set trackAlbum to ""
+    set trackArtwork to ""
+    set trackAddress to ""
+    set playPosition to "0"
+    set trackLength to "0"
+    set playerVolume to "0"
+    try
+      if player state is playing then set playerStatus to "playing"
+    end try
+    try
+      if player state is stopped then set playerStatus to "stopped"
+    end try
+${read('trackTitle', 'name of current track')}
+${read('trackArtist', 'artist of current track')}
+${read('trackAlbum', 'album of current track')}
+${app === 'Spotify' ? read('trackArtwork', 'artwork url of current track') + '\n' + read('trackAddress', 'id of current track') : ''}
+${read('playPosition', 'player position')}
+${read('trackLength', 'duration of current track')}
+${read('playerVolume', 'sound volume')}
+    return playerStatus & linefeed & trackTitle & linefeed & trackArtist & linefeed & trackAlbum & linefeed & trackArtwork & linefeed & playPosition & linefeed & trackLength & linefeed & playerVolume & linefeed & trackAddress
+  end tell
+else
+  return "off"
+end if`;
+}
+
+export function parseMusicJson(app: 'Spotify' | 'Music', out: string): NowPlaying | null {
+  const j = JSON.parse(out) as { off?: boolean; state?: string; title?: string; artist?: string; album?: string; art?: string; uri?: string; position?: number; duration?: number; volume?: number };
+  if (j.off) return null;
+  if (!j.title) return { app, state: 'stopped', volume: Math.round(j.volume ?? 0) };
+  const dur = j.duration ?? 0;
+  return { app, state: j.state === 'playing' ? 'playing' : j.state === 'stopped' ? 'stopped' : 'paused', title: j.title, artist: j.artist ?? '', album: j.album ?? '', art: j.art || undefined, uri: /^spotify:/.test(j.uri ?? '') ? j.uri : undefined, position: j.position ?? 0, duration: dur > 36000 ? dur / 1000 : dur, volume: Math.round(j.volume ?? 0) };
+}
+
 /** Read the player's reply: eight lines (state, title, artist, album, artwork, position, duration, volume). */
 export function parseMusic(app: 'Spotify' | 'Music', out: string): NowPlaying | null {
   if (out.trim() === 'off') return null;
-  const [st = '', title = '', artist = '', album = '', art = '', pos = '0', dur = '0', vol = '0'] = out.split(/\r?\n|\r/);
+  const [st = '', title = '', artist = '', album = '', art = '', pos = '0', dur = '0', vol = '0', uri = ''] = out.split(/\r?\n|\r/);
   const num = (v: string): number => parseFloat(v.replace(',', '.')) || 0;
   if (!title.trim()) return { app, state: 'stopped', volume: Math.round(num(vol)) };
   // Spotify reports a track's length in milliseconds, Music in seconds.
   const duration = num(dur) > 36000 ? num(dur) / 1000 : num(dur);
-  return { app, state: st.trim() === 'playing' ? 'playing' : st.trim() === 'stopped' ? 'stopped' : 'paused', title: title.trim(), artist: artist.trim(), album: album.trim(), art: art.trim() || undefined, position: num(pos), duration, volume: Math.round(num(vol)) };
+  return { app, state: st.trim() === 'playing' ? 'playing' : st.trim() === 'stopped' ? 'stopped' : 'paused', title: title.trim(), artist: artist.trim(), album: album.trim(), art: art.trim() || undefined, uri: /^spotify:/.test(uri.trim()) ? uri.trim() : undefined, position: num(pos), duration, volume: Math.round(num(vol)) };
 }
 
 /** `say -v ?` prints one voice per line: name, locale, then a sample sentence. */

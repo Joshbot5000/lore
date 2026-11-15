@@ -28,9 +28,12 @@ const web = http.createServer((req, res) => {
   }
   // ---- stand-in ElevenLabs and OpenAI
   if (url.pathname === '/v1/voices') return req.headers['xi-api-key'] === 'el-good' ? void res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ voices: [{ voice_id: 'v-rachel', name: 'Rachel', labels: { accent: 'american', gender: 'female' } }, { voice_id: 'v-george', name: 'George - Warm', labels: { accent: 'british', gender: 'male', description: 'warm' } }] })) : void res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ detail: { status: 'invalid_api_key', message: 'Invalid API key' } }));
+  const tone = (secs) => { const b = Buffer.alloc(Math.round(24000 * secs) * 2); for (let i = 0; i < b.length / 2; i++) b.writeInt16LE(Math.round(Math.sin(i / 20) * 8000), i * 2); return b; };
+  const drip = (buf) => { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); const parts = [buf.subarray(0, 9001), buf.subarray(9001, 30000), buf.subarray(30000)]; let i = 0; const go = () => (i < parts.length ? (res.write(parts[i++]), setTimeout(go, 120)) : res.end()); go(); };
+  if (/^\/v1\/text-to-speech\/[^/]+\/stream$/.test(url.pathname)) { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { cloud.push({ voice: url.pathname.split('/')[3], format: url.searchParams.get('output_format'), ...JSON.parse(b) }); if (cloudFail) return void res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ detail: { status: 'quota_exceeded', message: 'You have run out of credits' } })); drip(tone(1)); }); return; }
   if (url.pathname.startsWith('/v1/text-to-speech/')) { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { cloud.push({ voice: url.pathname.split('/').pop(), ...JSON.parse(b) }); if (cloudFail) return void res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ detail: { status: 'quota_exceeded', message: 'You have run out of credits' } })); res.writeHead(200, { 'Content-Type': 'audio/mpeg' }).end(`MP3 for: ${JSON.parse(b).text}`); }); return; }
   if (url.pathname === '/v1/models') return req.headers.authorization === 'Bearer oa-good' ? void res.end('{"data":[]}') : void res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'Incorrect API key provided' } }));
-  if (url.pathname === '/v1/audio/speech') { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { cloud.push(JSON.parse(b)); res.writeHead(200, { 'Content-Type': 'audio/mpeg' }).end(`MP3 for: ${JSON.parse(b).input}`); }); return; }
+  if (url.pathname === '/v1/audio/speech') { let b = ''; req.on('data', (d) => (b += d)); req.on('end', () => { cloud.push(JSON.parse(b)); if (JSON.parse(b).response_format === 'pcm') return drip(tone(1)); res.writeHead(200, { 'Content-Type': 'audio/mpeg' }).end(`MP3 for: ${JSON.parse(b).input}`); }); return; }
   if (req.headers.authorization !== `Bearer ${TOKEN}`) return void res.writeHead(401).end('{}');
   if (url.pathname === '/api/states') return void res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(states));
   const svc = url.pathname.match(/^\/api\/services\/(\w+)\/(\w+)$/);
@@ -143,7 +146,7 @@ try {
   const quiet = (b, from, step) => { let i = from, n = 0; while (i >= 0 && i < b.length - 1 && Math.abs(b.readInt16LE(i)) < 200) { i += step * 2; n++; } return n / 24000; };
   check('clips carry no padding silence', audio[0] && quiet(audio[0].pcm, 0, 1) < 0.06 && quiet(audio[0].pcm, audio[0].pcm.length - 2, -1) < 0.09, `lead ${quiet(audio[0].pcm, 0, 1).toFixed(2)} s, tail ${quiet(audio[0].pcm, audio[0].pcm.length - 2, -1).toFixed(2)} s`);
   audio.length = 0; const tb = Date.now(); await say('briefing'); await hush(22000);
-  check('a long reply is voiced as a few flowing passages with a breath between', audio.length >= 2 && audio.length <= 4 && audio.every((a) => a.gap === 280) && /\. \w/.test(audio[audio.length - 1].text), `${audio.length} clips (${audio.map((a) => a.secs.toFixed(1) + ' s').join(', ')}), first sound after ${audio[0]?.at - tb} ms, gaps ${[...new Set(audio.map((a) => a.gap))]}`);
+  check('a long reply is voiced as a few flowing passages with a breath between', audio.length >= 2 && audio.length <= 4 && audio.every((a) => a.gap === 260) && /\. \w/.test(audio[audio.length - 1].text), `${audio.length} clips (${audio.map((a) => a.secs.toFixed(1) + ' s').join(', ')}), first sound after ${audio[0]?.at - tb} ms, gaps ${[...new Set(audio.map((a) => a.gap))]}`);
   if (process.env.SHOTS) {
     const { chromium } = await import('playwright-core');
     const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
@@ -173,16 +176,27 @@ try {
   cr = await call('saveVoiceKey', { provider: 'eleven', key: 'el-good' });
   const cv = (await call('cloudVoices')).result;
   check('ElevenLabs voices are listed, British first', cr.result?.ok && cv.eleven?.[0]?.id === 'eleven:v-george' && cv.eleven[0].name === 'George' && cv.openai === null, JSON.stringify(cv.eleven));
-  audio.length = 0; await call('saveSettings', { voice: 'eleven:v-george' }); await say('what time is it'); await hush(1500);
-  check('replies are spoken with the cloud voice', audio.length === 1 && /^MP3 for: It's \d/.test(audio[0].mp3) && cloud[cloud.length - 1].voice === 'v-george' && cloud[cloud.length - 1].model_id === 'eleven_flash_v2_5', audio[0]?.mp3);
+  audio.length = 0; await call('saveSettings', { voice: 'eleven:v-george' }); const tc = Date.now(); await say('what time is it'); await hush(1500);
+  const total = () => audio.reduce((n, a) => n + a.secs, 0);
+  check('the cloud voice is played as it arrives, in joined-up pieces', audio.length >= 3 && /^It's \d/.test(audio[0].text) && Math.abs(total() - 1.01) < 0.02 && audio.slice(0, -1).every((a) => a.gap === 0) && audio[audio.length - 1].gap === 260 && cloud[cloud.length - 1].voice === 'v-george' && cloud[cloud.length - 1].format === 'pcm_24000' && cloud[cloud.length - 1].model_id === 'eleven_flash_v2_5', `${audio.length} pieces, ${total().toFixed(2)} s, first after ${audio[0]?.at - tc} ms`);
   cloudFail = true; audio.length = 0; await say('what time is it'); await hush(3500); cloudFail = false;
-  check('if the cloud voice fails, the built-in voice takes over', audio.length === 1 && !audio[0].mp3 && audio[0].secs > 0.5);
+  check('if the cloud voice fails, the built-in voice takes over', audio.length >= 1 && !audio[0].mp3 && audio[0].secs > 0.5 && /It's/.test(audio[0].text));
   cr = await call('saveVoiceKey', { provider: 'openai', key: 'oa-good' });
   audio.length = 0; await call('saveSettings', { voice: 'openai:fable' }); await say('what time is it'); await hush(1500);
-  check('OpenAI voices work too', cr.result?.ok && audio.length === 1 && /^MP3 for/.test(audio[0].mp3) && cloud[cloud.length - 1].voice === 'fable' && /British/.test(cloud[cloud.length - 1].instructions));
+  check('OpenAI voices work too', cr.result?.ok && audio.length >= 3 && Math.abs(total() - 1.01) < 0.02 && cloud[cloud.length - 1].voice === 'fable' && cloud[cloud.length - 1].response_format === 'pcm' && /British/.test(cloud[cloud.length - 1].instructions));
   await new Promise((r2) => setTimeout(r2, 400));
   check('cloud keys are kept out of settings and the dashboard', !/el-good|oa-good/.test(fs.readFileSync(path.join(data, 'settings.json'), 'utf8') + JSON.stringify(snap)) && /el-good/.test(fs.readFileSync(path.join(data, 'secrets.json'), 'utf8')));
   await call('saveSettings', { voice: 'bm_george*0.55+bm_fable*0.45' });
+  // ---------------- clicking through to the real thing
+  await call('saveSettings', { useAppleMail: true }); await new Promise((r2) => setTimeout(r2, 1500));
+  const withLink = snap.mail.find((m) => m.from === 'Dr Patel' && m.link);
+  await call('openItem', { kind: 'mail', id: withLink?.id }); await call('openItem', { kind: 'inbox' }); await call('openItem', { kind: 'event', id: 'e1' }); await call('openItem', { kind: 'calendar' }); await call('openItem', { kind: 'music' });
+  const opened = (await call('opened')).result;
+  check('clicking an email, the inbox, an event and the song opens each one', opened.includes('message://%3Cabc%40uni.example%3E') && opened.includes('app:Mail') && opened.includes('event:e1') && opened.includes('app:Calendar') && opened.includes('spotify:track:4iV5W9uYEdYUVa79Axb7Rh'), opened.slice(-6).join(' | '));
+  const pws = new WebSocket(`ws://${url.host}/ws?k=${url.searchParams.get('k')}&d=phone`); await new Promise((r2) => pws.on('open', r2));
+  const fromPhone = await new Promise((r2) => { pws.on('message', (raw) => { const m = JSON.parse(String(raw)); if (m.id === 1) r2(m.result); }); pws.send(JSON.stringify({ id: 1, method: 'openItem', params: { kind: 'music' } })); }); pws.close();
+  check('on the phone, the song opens on the phone itself', fromPhone?.url === 'https://open.spotify.com/track/4iV5W9uYEdYUVa79Axb7Rh' && (await call('opened')).result.length === opened.length, JSON.stringify(fromPhone));
+  await call('saveSettings', { useAppleMail: false });
   // ---------------- everyday commands, without the language model
   const fastCmd = async (text, re, name) => ask(text, (x) => re.test(x.text) && x.ms < 700, name);
   await fastCmd('Open Safari for me', /Opening Safari/);

@@ -360,3 +360,42 @@ describe('calendar, music and voices on the Mac', () => {
     expect(trimPcm(pcm).length / 2).toBeLessThan(7500);
   });
 });
+
+import { musicAppleScript, musicJxa, parseMusicJson } from '../src/brain/mac';
+describe('reading what is playing', () => {
+  const runJxa = (app: 'Spotify' | 'Music', fake: unknown) => new Function('Application', `return ${musicJxa(app)};`)(() => fake) as string;
+  const track = { name: () => 'Blinding Lights', artist: () => 'The Weeknd', album: () => 'After Hours', artworkUrl: () => 'https://i.scdn.co/image/x', id: () => 'spotify:track:0VjIjW4GlUZAMYd2vXMi3b', duration: () => 200040 };
+  it('runs as real JavaScript and reads every property', () => {
+    const out = runJxa('Spotify', { running: () => true, playerState: () => 'playing', currentTrack: track, playerPosition: () => 42.5, soundVolume: () => 63 });
+    expect(parseMusicJson('Spotify', out)).toEqual({ app: 'Spotify', state: 'playing', title: 'Blinding Lights', artist: 'The Weeknd', album: 'After Hours', art: 'https://i.scdn.co/image/x', uri: 'spotify:track:0VjIjW4GlUZAMYd2vXMi3b', position: 42.5, duration: 200.04, volume: 63 });
+  });
+  it('survives a property the app does not have, and an app that is closed', () => {
+    const broken = { ...track, artworkUrl: () => { throw new Error('no artwork'); }, album: () => undefined };
+    const got = parseMusicJson('Spotify', runJxa('Spotify', { running: () => true, playerState: () => 'paused', currentTrack: broken, playerPosition: () => { throw new Error('x'); }, soundVolume: () => 40 }));
+    expect(got).toMatchObject({ state: 'paused', title: 'Blinding Lights', album: '', art: undefined, position: 0, volume: 40 });
+    expect(parseMusicJson('Spotify', runJxa('Spotify', { running: () => false }))).toBeNull();
+    expect(parseMusicJson('Music', runJxa('Music', { running: () => true, playerState: () => 'playing', currentTrack: { name: () => 'Song', artist: () => 'Band', album: () => 'LP', duration: () => 185.3 }, playerPosition: () => 3, soundVolume: () => 50 }))).toMatchObject({ title: 'Song', duration: 185.3, uri: undefined });
+  });
+  it('the AppleScript fallback uses no reserved words as names', () => {
+    const script = musicAppleScript('Spotify');
+    const names = [...script.matchAll(/\bset (\w+) to/g)].map((m) => m[1]);
+    const reserved = ['st', 'nd', 'rd', 'th', 'it', 'me', 'my', 'of', 'in', 'on', 'at', 'to', 'as', 'is', 'or', 'and', 'not', 'the', 'end', 'set', 'get', 'out', 'ref', 'put', 'div', 'mod', 'for', 'by', 'from', 'into', 'with', 'if', 'then', 'else', 'try', 'tell', 'repeat', 'return', 'true', 'false', 'first', 'second', 'third', 'last', 'front', 'back', 'middle', 'some', 'every', 'name', 'id', 'index', 'class', 'result', 'text', 'item', 'items', 'number', 'date', 'time', 'file', 'application', 'script', 'error', 'copy', 'where', 'whose', 'while', 'until', 'times', 'exit', 'global', 'local', 'property', 'prop', 'given', 'considering', 'ignoring', 'timeout', 'transaction', 'position', 'duration', 'volume', 'artist', 'album', 'track', 'state', 'title', 'art'];
+    expect(names.length).toBeGreaterThan(8);
+    for (const n of names) expect(reserved).not.toContain(n.toLowerCase());
+    for (const n of names) expect(n.length).toBeGreaterThan(8);
+    // balanced blocks
+    expect((script.match(/^\s*try$/gm) ?? []).length).toBe((script.match(/^\s*end try$/gm) ?? []).length);
+    expect((script.match(/^\s*tell /gm) ?? []).length).toBe((script.match(/^\s*end tell$/gm) ?? []).length);
+  });
+});
+
+import { mailLink } from '../src/brain/imap';
+describe('links to the real thing', () => {
+  it('opens a Gmail conversation in the right account', () => {
+    const acc = { host: 'imap.gmail.com', user: 'josh@example.com' };
+    expect(mailLink(acc, '1849923412345678901', '<abc@mail.example>')).toBe('https://mail.google.com/mail/u/?authuser=josh%40example.com#all/19ac3f8ace8aec35');
+    expect(mailLink(acc, undefined, '<abc@mail.example>')).toBe('https://mail.google.com/mail/u/?authuser=josh%40example.com#search/rfc822msgid%3Aabc%40mail.example');
+    expect(mailLink(acc)).toBe('https://mail.google.com/mail/u/?authuser=josh%40example.com#inbox');
+    expect(mailLink({ host: 'imap.fastmail.com', user: 'a@b.c' }, '123', '<x@y>')).toBeUndefined();
+  });
+});

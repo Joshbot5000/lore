@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowUp, BatteryCharging, Check, ChevronRight, Cpu, Lightbulb, Mail as MailIcon, Mic, Pause, Play, Plus, SkipBack, SkipForward, Sparkles, Square, Timer as TimerIcon, Trash2, Volume2, X, Zap } from 'lucide-react';
-import { act, call, get, set, toast, useLink, useSnap } from './link';
+import { act, call, get, openItem, set, toast, useLink, useSnap } from './link';
 import { hush, setHandsFree, talkEnd, talkStart, unlock } from './voice';
 import { Core } from './Core';
 import { Card, WeatherIcon, ago, clock, dayName, mmss } from './bits';
@@ -71,7 +71,7 @@ export function UpcomingCard() {
   useNow(30000);
   const next = events.filter((e) => !eventOver(e)).slice(0, 6);
   return (
-    <Card id="upcoming" tab="today" label="Upcoming" right={<span className="label dim">{next.filter((e) => new Date(e.start).toDateString() === new Date().toDateString()).length} today</span>}>
+    <Card id="upcoming" tab="today" label="Upcoming" onOpen={() => openItem('calendar')} openHint="Open your calendar" right={<span className="label dim">{next.filter((e) => new Date(e.start).toDateString() === new Date().toDateString()).length} today</span>}>
       {!next.length ? (
         <button className="empty" onClick={() => set({ panel: 'settings' })}>{state.state === 'setup' ? 'Connect a calendar in Settings, or just say “schedule dinner on Friday at 7”.' : 'Nothing coming up. Enjoy it.'}</button>
       ) : (
@@ -79,7 +79,7 @@ export function UpcomingCard() {
           {next.map((e) => {
             const live = e.start <= Date.now() && !e.allDay;
             return (
-              <li key={e.id} className={live ? 'live' : ''}>
+              <li key={e.id} className={`tap ${live ? 'live' : ''}`} role="button" tabIndex={0} title="Show this in your calendar" onClick={() => openItem('event', e.id)} onKeyDown={(k) => k.key === 'Enter' && openItem('event', e.id)}>
                 <span className="when mono">{e.allDay ? 'all day' : clock(e.start)}</span>
                 <span className="grow"><b>{e.title}</b>{e.where && <i>{e.where}</i>}</span>
                 <span className="tag">{live ? 'now' : e.allDay && e.start <= Date.now() ? 'Today' : dayName(e.start)}</span>
@@ -97,7 +97,7 @@ export function InboxCard() {
   const unread = useSnap((s) => s.unread);
   const state = useSnap((s) => s.integrations.mail);
   return (
-    <Card id="inbox" tab="today" label="Inbox" right={<span className={`label ${unread ? 'hot' : 'dim'}`}>{unread} unread</span>}>
+    <Card id="inbox" tab="today" label="Inbox" onOpen={() => openItem('inbox')} openHint="Open your inbox" right={<span className={`label ${unread ? 'hot' : 'dim'}`}>{unread} unread</span>}>
       {state.state !== 'ok' ? (
         <div className="empty"><MailIcon size={18} /> {state.detail ?? 'Mail is not connected.'}</div>
       ) : !mail.length ? (
@@ -105,7 +105,7 @@ export function InboxCard() {
       ) : (
         <ul className="rows mail">
           {mail.slice(0, 6).map((m) => (
-            <li key={m.id}><span className="dot" /><span className="grow"><b>{m.from}</b><i>{m.subject}</i></span><span className="when mono">{ago(m.at)}</span></li>
+            <li key={m.id} className="tap" role="button" tabIndex={0} title="Open this email" onClick={() => openItem('mail', m.id)} onKeyDown={(e) => e.key === 'Enter' && openItem('mail', m.id)}><span className="dot" /><span className="grow"><b>{m.from}</b><i>{m.subject}</i></span><span className="when mono">{ago(m.at)}</span></li>
           ))}
         </ul>
       )}
@@ -169,14 +169,14 @@ export function MusicCard() {
   }, [m?.state, m?.duration, m?.title]);
   const playing = m?.state === 'playing';
   return (
-    <Card id="music" tab="life" label="Now playing" right={<span className="label dim">{app}</span>}>
+    <Card id="music" tab="life" label="Now playing" onOpen={() => openItem('music')} openHint={`Open this in ${app}`} right={<span className="label dim">{app}</span>}>
       {!m || !m.title ? (
         <div className="empty">{state.state === 'error' ? `I can't read ${app} right now: ${state.detail}` : m ? `Nothing playing in ${app}.` : `${app} isn't open. Open it and I will take the controls.`}</div>
       ) : (
         <div className="music">
-          <div className={`art ${playing ? 'spin' : ''}`} style={m.art ? { backgroundImage: `url(${m.art})` } : undefined}>{!m.art && <span className="eq"><i /><i /><i /><i /></span>}</div>
+          <div className={`art tap ${playing ? 'spin' : ''}`} role="button" title={`Open this song in ${app}`} onClick={() => openItem('music')} style={m.art ? { backgroundImage: `url(${m.art})` } : undefined}>{!m.art && <span className="eq"><i /><i /><i /><i /></span>}</div>
           <div className="grow">
-            <b className="track">{m.title}</b>
+            <b className="track tap" role="button" tabIndex={0} title={`Open this song in ${app}`} onClick={() => openItem('music')}>{m.title}</b>
             <i className="artist">{m.artist}</i>
             <div className="scrub"><span style={{ width: `${m.duration ? (pos / m.duration) * 100 : 0}%` }} /></div>
             <div className="scrub-t mono"><span>{mmss(pos)}</span><span>{mmss(m.duration ?? 0)}</span></div>

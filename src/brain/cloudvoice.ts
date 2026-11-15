@@ -76,3 +76,44 @@ export async function openaiSpeak(fetcher: Fetch, key: string, voice: string, te
   if (!res.ok) await fail(res, 'OpenAI');
   return Buffer.from(await res.arrayBuffer());
 }
+
+/** Read raw 16-bit audio from a response as it arrives, handing it on in playable pieces. Returns the bytes delivered. */
+async function pump(res: Response, onPcm: (pcm: Buffer) => void): Promise<number> {
+  const reader = (res.body as unknown as { getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }> } }).getReader();
+  let carry: Buffer = Buffer.alloc(0);
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (value?.length) carry = carry.length ? Buffer.concat([carry, Buffer.from(value)]) : Buffer.from(value);
+    // The first piece goes out almost at once so speech starts; later ones are a third of a second each.
+    const need = total === 0 ? 4800 : 16000;
+    if (carry.length >= need || (done && carry.length >= 2)) {
+      const n = carry.length - (carry.length % 2);
+      onPcm(carry.subarray(0, n));
+      total += n;
+      carry = carry.subarray(n);
+    }
+    if (done) break;
+  }
+  return total;
+}
+
+/** Speak with ElevenLabs, playing the audio as it is produced (24 kHz, 16-bit). */
+export async function elevenStream(fetcher: Fetch, key: string, voiceId: string, text: string, speed: number, onPcm: (pcm: Buffer) => void): Promise<number> {
+  const res = await timed(fetcher, `${ELEVEN()}/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=pcm_24000`, {
+    method: 'POST', headers: { 'xi-api-key': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, model_id: 'eleven_flash_v2_5', voice_settings: { stability: 0.45, similarity_boost: 0.8, speed: Math.max(0.7, Math.min(1.2, speed)) } }),
+  }, 'ElevenLabs');
+  if (!res.ok) await fail(res, 'ElevenLabs');
+  return pump(res, onPcm);
+}
+
+/** Speak with OpenAI, playing the audio as it is produced (24 kHz, 16-bit). */
+export async function openaiStream(fetcher: Fetch, key: string, voice: string, text: string, assistant: string, onPcm: (pcm: Buffer) => void): Promise<number> {
+  const res = await timed(fetcher, `${OPENAI()}/v1/audio/speech`, {
+    method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-4o-mini-tts', voice, input: text, response_format: 'pcm', instructions: `You are ${assistant}, a calm, warm, quick-witted British personal assistant. Speak naturally and conversationally, as if talking to someone you know well, at an easy brisk pace.` }),
+  }, 'OpenAI');
+  if (!res.ok) await fail(res, 'OpenAI');
+  return pump(res, onPcm);
+}

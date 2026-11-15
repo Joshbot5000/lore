@@ -30,10 +30,13 @@ serve({
       asrRepo = repo;
       return true;
     }),
-  transcribe: ({ pcm, language }: { pcm: Float32Array | number[]; language: string }) =>
+  transcribe: ({ pcm16, language }: { pcm16: string; language: string }) =>
     queued(async () => {
       if (!asr) throw new Error('Speech model is not loaded');
-      const audio = pcm instanceof Float32Array ? pcm : Float32Array.from(pcm);
+      // 16-bit samples as base64 text: it crosses any kind of process boundary intact.
+      const buf = Buffer.from(pcm16, 'base64');
+      const audio = new Float32Array(buf.length >> 1);
+      for (let i = 0; i < audio.length; i++) audio[i] = buf.readInt16LE(i * 2) / 32768;
       const out = await asr(audio, { language, task: 'transcribe', chunk_length_s: 30, stride_length_s: 5 });
       return String(out.text ?? '').replace(/[\[(][^\])]{0,40}[\])]/g, '').replace(/\s+/g, ' ').trim();
     }),

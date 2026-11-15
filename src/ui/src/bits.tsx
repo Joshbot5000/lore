@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import { Cloud, CloudDrizzle, CloudFog, CloudLightning, CloudMoon, CloudRain, CloudSnow, CloudSun, Moon, Sun } from 'lucide-react';
 
-export function Card({ id, tab, label, right, children, className = '' }: { id: string; tab: 'core' | 'today' | 'life'; label: string; right?: ReactNode; children: ReactNode; className?: string }) {
+export function Card({ id, tab, label, right, children, className = '', onOpen, openHint }: { id: string; tab: 'core' | 'today' | 'life'; label: string; right?: ReactNode; children: ReactNode; className?: string; onOpen?: () => void; openHint?: string }) {
   return (
     <section className={`card card-${id} ${className}`} data-tab={tab} style={{ gridArea: id }}>
       <i className="corner tl" /><i className="corner tr" /><i className="corner bl" /><i className="corner br" />
-      <header className="card-head"><span className="label">{label}</span><span className="card-right">{right}</span></header>
+      <header className="card-head">{onOpen ? <button className="label card-open" onClick={onOpen} title={openHint}>{label} <span aria-hidden>↗</span></button> : <span className="label">{label}</span>}<span className="card-right">{right}</span></header>
       <div className="card-body">{children}</div>
     </section>
   );

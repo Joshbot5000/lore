@@ -92,3 +92,21 @@ then tests/chat.mjs, tests/voice.mjs, tests/look.mjs against the printed address
         Cause not confirmed (most likely a normal password instead of an app password).
       * Settings -> Health check (brain.diagnose()) for copy-paste diagnostics.
       Tests: home.mjs 54, life.mjs 25, study.mjs 20, unit 34. Still untested on real hardware/services.
+
+- [x] Round 7 (15 Nov): Josh on the round-6 build: Spotify card shows "syntax error" and "1 integration failing";
+      speech lags the text and stops for seconds after each full stop; wants cards to click through.
+      * Spotify syntax error: my AppleScript used `st` as a variable (a reserved word, as in "1st"), in BOTH
+        earlier versions, so it never compiled on a real Mac. Now read with JavaScript for Automation
+        (musicJxa, executed for real in unit tests with a stub Application) with an AppleScript fallback that
+        uses long names only. This was almost certainly the "1 integration failing" too; the label now names
+        what is failing and shows why when clicked.
+      * Speech: (1) ears and voice engines now run under plain Node in the Mac app, like the mind (Electron
+        helper processes get low priority / efficiency cores on Apple Silicon: suspected cause of slow
+        synthesis; NOT measured); audio to the speech engine is base64 so JSON IPC works. (2) Cloud voices are
+        streamed as raw audio and played as they arrive. (3) If the built-in voice cannot keep ahead of its
+        own speech (voiceRate < 1.6) the whole reply is spoken in one go instead of stalling between sentences.
+        (4) A long opening sentence starts at its first clause.
+      * Click-through: brain action openItem (email -> Gmail conversation via X-GM-THRID or message:// in
+        Mail; inbox; event -> Calendar `show`, or Google Calendar day; song -> spotify: address). Phones get a
+        web address back and open it themselves.
+      Tests: home.mjs 56, life.mjs 25, study.mjs 20, unit 38, shell ok. Real Mac still unverified.

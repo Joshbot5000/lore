@@ -243,3 +243,9 @@ input[type='range'] { -webkit-appearance: none; appearance: none; flex: 1; heigh
 .chip.spinning svg { animation: spin 0.8s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 .link-btn { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font: inherit; display: inline; }
 .report { white-space: pre-wrap; word-break: break-word; font: 11.5px/1.55 var(--mono); color: var(--text2); background: var(--panel2); border: 1px solid var(--hair); border-radius: 10px; padding: 10px 12px; max-height: 320px; overflow: auto; user-select: text; -webkit-user-select: text; cursor: text; margin-top: 8px; }
+
+/* ---------- things you can click through to ---------- */
+.card-open { cursor: pointer; transition: color .15s, text-shadow .15s; } .card-open span { opacity: .55; margin-left: 3px; } .card-open:hover { color: var(--accent); text-shadow: 0 0 12px rgba(var(--accent-rgb), .6); } .card-open:hover span { opacity: 1; }
+.rows li.tap { cursor: pointer; border-radius: 8px; margin: 0 -8px; padding-left: 8px; padding-right: 8px; transition: background .12s; } .rows li.tap:hover, .rows li.tap:focus-visible { background: rgba(var(--accent-rgb), .08); outline: none; }
+.track.tap, .art.tap { cursor: pointer; } .track.tap:hover { color: var(--accent); }
+.label.fail { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }

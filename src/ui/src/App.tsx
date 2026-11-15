@@ -16,7 +16,9 @@ function TopBar() {
   const name = useSnap((s) => s.settings.assistantName);
   const memories = useSnap((s) => s.memories.length);
   const online = useLink((s) => s.online);
-  const failing = Object.values(integrations).filter((i) => i.state === 'error').length;
+  const broken = Object.entries(integrations).filter(([, i]) => i.state === 'error');
+  const failing = broken.length;
+  const NAMES: Record<string, string> = { mail: 'Mail', calendar: 'Calendar', weather: 'Weather', home: 'Home', music: 'Music', hark: 'Hark', system: 'System' };
   const [busy, setBusy] = useState(false);
   const refresh = () => {
     if (busy) return;
@@ -31,7 +33,7 @@ function TopBar() {
       </div>
       <div className="top-right">
         {!online && <span className="label hot blink">reconnecting</span>}
-        {online && failing > 0 && <span className="label hot">{failing} integration{failing > 1 ? 's' : ''} failing</span>}
+        {online && failing > 0 && <button className="label hot fail" title={broken.map(([k, i]) => `${NAMES[k] ?? k}: ${i.detail ?? 'not responding'}`).join('\n')} onClick={() => broken.forEach(([k, i]) => toast(`${NAMES[k] ?? k}: ${i.detail ?? 'not responding'}`, 'alert'))}>{broken.map(([k]) => NAMES[k] ?? k).join(', ')} not working</button>}
         <button className={`chip ${busy ? 'spinning' : ''}`} onClick={refresh} title="Refresh calendar, mail, music and everything else now"><RefreshCw size={14} /></button>
         <button className="chip" onClick={() => set({ panel: 'mind' })} title="What I remember"><Brain size={14} /> {memories}</button>
         <button className={`chip ${speak ? 'on' : ''}`} onClick={() => (unlock(), act('saveSettings', { speak: !speak }))} title={speak ? 'Voice on' : 'Voice off'}>{speak ? <Volume2 size={14} /> : <VolumeX size={14} />}</button>

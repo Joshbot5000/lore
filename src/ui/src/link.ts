@@ -75,6 +75,15 @@ export function call<T = unknown>(method: string, params: Record<string, unknown
     ws.send(JSON.stringify({ id, method, params }));
   });
 }
+/** Open what a card shows (an email, an event, the song playing): on the Mac it opens there; a phone opens the web page itself. */
+export const openItem = (kind: 'mail' | 'inbox' | 'event' | 'calendar' | 'music', id?: string): void =>
+  void call<{ url?: string } | null>('openItem', { kind, id }).then(
+    (r) => {
+      if (r?.url) window.open(r.url, '_blank', 'noopener');
+    },
+    (e: Error) => toast(e.message, 'alert'),
+  );
+
 /** Fire an action; show any failure as a toast. */
 export const act = (method: string, params: Record<string, unknown> = {}): void => void call(method, params).catch((e: Error) => toast(e.message, 'alert'));
 

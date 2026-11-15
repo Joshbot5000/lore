@@ -12,6 +12,19 @@ export const MAIL_PRESETS: Record<string, { name: string; host: string; port: nu
   other: { name: 'Other', host: '', port: 993, help: 'Enter your provider\'s IMAP server. Outlook.com and Hotmail are not supported: Microsoft only allows sign-in through its own apps.' },
 };
 
+/** Where to open a message: Gmail's own page for that conversation, picking the right Google account. */
+export function mailLink(acc: { host: string; user: string }, threadId?: string, messageId?: string): string | undefined {
+  if (!/gmail|googlemail/i.test(acc.host)) return undefined;
+  const base = `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(acc.user)}`;
+  try {
+    // Gmail's web addresses use the conversation number in hexadecimal.
+    if (threadId && /^\d+$/.test(threadId)) return `${base}#all/${BigInt(threadId).toString(16)}`;
+  } catch {
+    /* fall through to a search for the message */
+  }
+  return messageId ? `${base}#search/${encodeURIComponent(`rfc822msgid:${messageId.replace(/^<|>$/g, '')}`)}` : `${base}#inbox`;
+}
+
 /** Unread messages in the inbox, newest first. Opens the mailbox read-only: nothing is marked as read or changed. */
 export async function fetchUnread(acc: MailLogin, limit = 8): Promise<{ unread: number; items: Mail[] }> {
   const client = new ImapFlow({
@@ -36,11 +49,13 @@ export async function fetchUnread(acc: MailLogin, limit = 8): Promise<{ unread: 
       const uids = (Array.isArray(found) ? found : []).sort((a, b) => a - b);
       const items: Mail[] = [];
       if (uids.length) {
-        for await (const msg of client.fetch(uids.slice(-limit), { envelope: true, uid: true, internalDate: true }, { uid: true })) {
+        const gmail = /gmail|googlemail/i.test(acc.host);
+        for await (const msg of client.fetch(uids.slice(-limit), { envelope: true, uid: true, internalDate: true, ...(gmail ? { threadId: true } : {}) }, { uid: true })) {
           const from = msg.envelope?.from?.[0];
           items.push({
             id: `${acc.id}:${msg.uid}`, from: from?.name || (from?.address ? from.address.split('@')[0].replace(/[._]+/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()) : 'Unknown'), subject: msg.envelope?.subject || '(no subject)',
             at: new Date(msg.envelope?.date ?? msg.internalDate ?? Date.now()).getTime(),
+            link: mailLink(acc, (msg as { threadId?: string }).threadId, msg.envelope?.messageId),
           });
         }
       }

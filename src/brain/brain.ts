@@ -19,7 +19,7 @@ import { HomeAssistant, isOn, matchEntities, parseHomeCommand, tapService, type 
 import { MAIL_PRESETS, fetchUnread } from './imap';
 import fs from 'node:fs';
 import { contentWords, deckStats, fetchRepo, grade, isDue, isRepo, looksLegal, matchDecks, pickCards, readFolder, record, studyContext, vocabulary, type Card, type Library } from './study';
-import { OPENAI_VOICES, elevenSpeak, elevenVoices, openaiCheck, openaiSpeak, type CloudVoice } from './cloudvoice';
+import { OPENAI_VOICES, elevenSpeak, elevenStream, elevenVoices, openaiCheck, openaiSpeak, openaiStream, type CloudVoice } from './cloudvoice';
 import { DEFAULT_SETTINGS, uid } from '../shared/types';
 import type { Focus, FocusNow, Habit, Recording, Routine } from '../shared/types';
 import type { CalEvent, ChatMsg, EngineStatus, HomeAction, Integrations, Mail, Memory, Need, NowPlaying, Push, Settings, Snapshot, Task, Timer, ToolUse, Vitals, Weather } from '../shared/types';
@@ -398,7 +398,7 @@ export class Brain extends EventEmitter {
   async refreshCalendar(): Promise<void> {
     const s = this.settings;
     const from = new Date().setHours(0, 0, 0, 0), to = Date.now() + 14 * 864e5;
-    const all: CalEvent[] = this.store.get('events').filter((e) => e.end >= from && e.start <= to).map((e) => ({ ...e, calendar: 'Jarvis' }));
+    const all: CalEvent[] = this.store.get('events').filter((e) => e.end >= from && e.start <= to).map((e) => ({ ...e, calendar: 'Jarvis', source: 'jarvis' as const }));
     let ok = false, problem = '';
     for (const url of s.calendarUrls) {
       try {
@@ -407,7 +407,8 @@ export class Brain extends EventEmitter {
         const timer = setTimeout(() => ctrl.abort(), 20000);
         const res = await this.o.fetch(url.replace(/^webcal:/, 'https:'), { signal: ctrl.signal, cache: 'no-store' } as never).finally(() => clearTimeout(timer));
         if (!res.ok) throw new Error(`Calendar feed returned ${res.status}`);
-        all.push(...expand(parseIcs(await res.text()), from, to, 'Calendar'));
+        const source = /calendar\.google\.com/i.test(url) ? ('google' as const) : ('feed' as const);
+        all.push(...expand(parseIcs(await res.text()), from, to, 'Calendar').map((e) => ({ ...e, source })));
         ok = true;
       } catch (err) {
         problem = (err as Error).message;
@@ -1611,44 +1612,86 @@ export class Brain extends EventEmitter {
    */
   private speakOut(turn: string, text: string, last = false): Promise<void> {
     const clean = speakable(text);
-    const s = this.settings;
     if (clean) this.waiting.set(turn, [...(this.waiting.get(turn) ?? []), clean]);
+    if (last) this.finals.add(turn);
     this.speakChain = this.speakChain.then(async () => {
-      const seq = this.speakSeq.get(turn) ?? 0;
       const queue = this.waiting.get(turn) ?? [];
-      // How much to say in one breath. The opening is kept short so speech starts promptly. After
-      // that, a passage may only be as long as the voice can produce before what is already
-      // playing runs out; otherwise speech would stop dead while the next passage is made.
-      const lead = Math.max(0, (this.playEnd - Date.now()) / 1000);
-      const limit = seq === 0 ? 110 : Math.max(70, Math.min(320, Math.round(lead * this.voiceRate * 0.7 * 15)));
-      const take: string[] = [];
-      while (queue.length && (!take.length || take.join(' ').length + queue[0].length < limit)) take.push(queue.shift()!);
-      if (!queue.length) this.waiting.delete(turn);
-      const passage = take.join(' ');
-      if (!passage && !last) return;
-      this.speakSeq.set(turn, seq + 1);
-      if (this.speakSeq.size > 40) this.speakSeq.delete(this.speakSeq.keys().next().value!);
-      if (!passage || !this.canSpeak() || (this.activeTurn !== turn && !turn.startsWith('n') && !turn.startsWith('p'))) {
-        if (last) this.push({ type: 'audio', turn, seq, wav: '', text: '', last: true });
-        return;
-      }
-      try {
-        const t0 = Date.now();
-        const wav = await this.synth(passage, s.voice, s.speed);
-        // About 15 characters are spoken per second; raw audio tells us exactly.
-        const secs = wav.startsWith('mp3:') ? passage.length / 15 : (wav.length - wav.indexOf(':') - 1) * 0.75 / 2 / (parseInt(wav, 10) || 24000);
-        this.voiceRate = Math.max(0.5, Math.min(40, this.voiceRate * 0.5 + (secs / Math.max(0.05, (Date.now() - t0) / 1000)) * 0.5));
-        this.playEnd = Math.max(Date.now(), this.playEnd) + secs * 1000 + 250;
-        this.voiceStats = { voice: s.voice.split(':')[0].replace(/^[a-z]{2}_.*/, 'built-in'), rate: Math.round(this.voiceRate * 10) / 10, lastMs: Date.now() - t0, lastChars: passage.length };
+      const cloud = /^(eleven|openai):/.test(this.settings.voice);
+      // A voice that cannot keep ahead of its own speech (a struggling machine) would stop after
+      // every sentence. Better then to wait for the whole reply and say it in one unbroken go.
+      const slow = !cloud && this.voiceRate < 1.6 && !turn.startsWith('n') && !turn.startsWith('p');
+      if (slow && !this.finals.has(turn)) return;
+      do {
+        const seq = this.speakSeq.get(turn) ?? 0;
+        // How much to say in one breath. The opening is kept short so speech starts promptly. After
+        // that, a passage may only be as long as the voice can produce before what is already
+        // playing runs out; otherwise speech would stop dead while the next passage is made.
+        const lead = Math.max(0, (this.playEnd - Date.now()) / 1000);
+        const limit = cloud ? 400 : slow ? 320 : seq === 0 ? 110 : Math.max(70, Math.min(320, Math.round(lead * this.voiceRate * 0.7 * 15)));
+        const take: string[] = [];
+        while (queue.length && (!take.length || take.join(' ').length + queue[0].length < limit)) take.push(queue.shift()!);
+        const passage = take.join(' ');
+        if (!passage) break;
+        this.speakSeq.set(turn, seq + 1);
+        if (this.speakSeq.size > 40) this.speakSeq.delete(this.speakSeq.keys().next().value!);
+        if (!this.canSpeak() || (this.activeTurn !== turn && !turn.startsWith('n') && !turn.startsWith('p'))) continue;
         // A breath after a sentence, a beat after a clause.
-        const gap = /[.!?…]["')\]]?$/.test(passage) ? 280 : /[,;:—–]$/.test(passage) ? 110 : 60;
-        this.push({ type: 'audio', turn, seq, wav, text: passage, last: last && !this.waiting.has(turn), gap });
-        this.mark(turn, 'voice');
-      } catch {
-        if (last) this.push({ type: 'audio', turn, seq, wav: '', text: '', last: true });
+        const gap = /[.!?…]["')\]]?$/.test(passage) ? 260 : /[,;:—–]$/.test(passage) ? 100 : 50;
+        await this.speakPassage(turn, seq, passage, gap).catch(() => undefined);
+      } while (queue.length && this.finals.has(turn));
+      if (!queue.length) this.waiting.delete(turn);
+      if (last) {
+        this.finals.delete(turn);
+        this.push({ type: 'audio', turn, seq: this.speakSeq.get(turn) ?? 0, wav: '', text: '', last: true });
       }
     });
     return this.speakChain;
+  }
+
+  private finals = new Set<string>();
+
+  /** Voice one passage and send it to every device. Cloud voices are played as they arrive. */
+  private async speakPassage(turn: string, seq: number, passage: string, gap: number): Promise<void> {
+    const s = this.settings;
+    const t0 = Date.now();
+    const sent = (secs: number, firstMs: number): void => {
+      this.voiceRate = Math.max(0.5, Math.min(40, this.voiceRate * 0.5 + (secs / Math.max(0.05, (Date.now() - t0) / 1000)) * 0.5));
+      this.playEnd = Math.max(Date.now(), this.playEnd) + secs * 1000 + gap;
+      this.voiceStats = { voice: s.voice.split(':')[0].replace(/^[a-z]{2}_.*/, 'built-in'), rate: Math.round(this.voiceRate * 10) / 10, lastMs: firstMs, lastChars: passage.length };
+    };
+    const keys = this.store.get('secrets');
+    if (/^(eleven|openai):/.test(s.voice)) {
+      let bytes = 0, firstMs = 0;
+      const onPcm = (pcm: Buffer): void => {
+        firstMs ||= Date.now() - t0;
+        this.push({ type: 'audio', turn, seq, wav: `24000:${pcm.toString('base64')}`, text: bytes === 0 ? passage : '', gap: 0 });
+        bytes += pcm.length;
+        this.mark(turn, 'voice');
+      };
+      try {
+        if (s.voice.startsWith('eleven:')) await elevenStream(this.o.fetch, keys.elevenKey ?? '', s.voice.slice(7), passage, s.speed, onPcm);
+        else await openaiStream(this.o.fetch, keys.openaiKey ?? '', s.voice.slice(7), passage, s.assistantName, onPcm);
+        this.cloudDown = '';
+      } catch (err) {
+        if (!bytes) {
+          // Streaming may not be offered on every plan: fall back to a whole clip, then to the built-in voice (inside synth).
+          const wav = await this.synth(passage, s.voice, s.speed);
+          this.push({ type: 'audio', turn, seq, wav, text: passage, gap });
+          this.mark(turn, 'voice');
+          return sent(passage.length / 15, Date.now() - t0);
+        }
+        this.cloudDown = (err as Error).message;
+      }
+      // The pause after the passage, as a sliver of silence so the pieces before it stay joined up.
+      this.push({ type: 'audio', turn, seq, wav: `24000:${Buffer.alloc(480).toString('base64')}`, text: '', gap });
+      return sent(bytes / 2 / 24000, firstMs);
+    }
+    const wav = await this.synth(passage, s.voice, s.speed);
+    // About 15 characters are spoken per second; raw audio tells us exactly.
+    const secs = wav.startsWith('mp3:') ? passage.length / 15 : ((wav.length - wav.indexOf(':') - 1) * 0.75) / 2 / (parseInt(wav, 10) || 24000);
+    this.push({ type: 'audio', turn, seq, wav, text: passage, gap });
+    this.mark(turn, 'voice');
+    sent(secs, Date.now() - t0);
   }
 
   async previewVoice(voice: string): Promise<void> {
@@ -1669,13 +1712,10 @@ export class Brain extends EventEmitter {
   /** Speech in: transcribe, then (if it was meant for Jarvis) answer. */
   async hear(pcmBase64: string, opts: { device?: string; needWake?: boolean } = {}): Promise<{ heard: string; ignored?: boolean }> {
     await this.ensureAsr();
-    const buf = Buffer.from(pcmBase64, 'base64');
-    const pcm = new Float32Array(buf.length / 2);
-    for (let i = 0; i < pcm.length; i++) pcm[i] = buf.readInt16LE(i * 2) / 32768;
     const t0 = Date.now();
-    const heard = await this.speech.call<string>('transcribe', { pcm, language: 'en' });
+    const heard = await this.speech.call<string>('transcribe', { pcm16: pcmBase64, language: 'en' });
     const asr = Date.now() - t0;
-    this.lastAsr = { ms: asr, secs: pcm.length / 16000 };
+    this.lastAsr = { ms: asr, secs: (pcmBase64.length * 0.75) / 2 / 16000 };
     if (!heard || heard.replace(/[^a-z]/gi, '').length < 2) return { heard: '', ignored: true };
     if (opts.needWake) {
       const name = this.settings.assistantName.toLowerCase();
@@ -1778,7 +1818,12 @@ export class Brain extends EventEmitter {
     const voice = (final: boolean): void => {
       if (!speak) return;
       const cut = takeSentences(shown.slice(said), final);
-      if (!cut.sentences.length) return;
+      if (!cut.sentences.length) {
+        // A long opening sentence: start speaking at its first natural break instead of waiting for the full stop.
+        const clause = said === 0 && !final ? shown.match(/^(.{45,}?[,;:—–])\s+(?=\S)/) : null;
+        if (clause && shown.length - clause[0].length > 12) (void this.speakOut(turn, clause[1]), (said = clause[0].length));
+        return;
+      }
       if (!final && said === 0 && cut.sentences.length === 1 && cut.sentences[0].length < 28) return;
       for (const sentence of cut.sentences) void this.speakOut(turn, sentence);
       said = shown.length - cut.rest.length;
@@ -1989,7 +2034,39 @@ export class Brain extends EventEmitter {
     },
     runShortcut: (p: { name: string }) => this.o.mac.runShortcut(p.name),
     allShortcuts: () => this.o.mac.shortcuts().catch(() => []),
+    /** (Tests only) what the stand-in Mac was asked to open. */
+    opened: () => this.o.mac.opened ?? [],
     refresh: () => this.refreshAll(),
+    /**
+     * Open the thing behind a card: an email, the inbox, an event, or the song that is playing.
+     * On the Mac it is opened there. A phone gets the web address back and opens it itself.
+     */
+    openItem: async (p: { kind: 'mail' | 'inbox' | 'event' | 'calendar' | 'music'; id?: string; device?: string }) => {
+      const mac = this.o.mac, phone = p.device === 'phone';
+      const gmail = this.settings.mailAccounts.find((a) => /gmail|googlemail/i.test(a.host));
+      const day = (t: number) => `${new Date(t).getFullYear()}/${new Date(t).getMonth() + 1}/${new Date(t).getDate()}`;
+      let url = '';
+      if (p.kind === 'mail' || p.kind === 'inbox') {
+        const m = p.kind === 'mail' ? this.mail.find((x) => x.id === p.id) : undefined;
+        url = m?.link ?? (gmail ? `https://mail.google.com/mail/u/?authuser=${encodeURIComponent(gmail.user)}#inbox` : '');
+        if (!url && !phone) return void (await mac.activate('Mail'));
+      } else if (p.kind === 'event' || p.kind === 'calendar') {
+        const e = p.kind === 'event' ? this.events.find((x) => x.id === p.id) : undefined;
+        if (e?.source === 'google' || (!e && !this.settings.useAppleCalendar && this.settings.calendarUrls.some((u) => /calendar\.google\.com/i.test(u)))) url = `https://calendar.google.com/calendar/u/0/r/${e ? `day/${day(e.start)}` : 'week'}`;
+        else if (!phone) {
+          // Apple Calendar: show the event itself; if it can't be found there, at least bring Calendar forward.
+          if (!(e?.source === 'apple' && (await mac.showEvent(e.id).catch(() => false)))) await mac.activate('Calendar');
+          return;
+        }
+      } else if (p.kind === 'music') {
+        const uri = this.music?.uri;
+        if (phone) url = uri ? `https://open.spotify.com/${uri.split(':')[1]}/${uri.split(':')[2]}` : '';
+        else return void (uri ? await mac.openUrl(uri) : await mac.activate(this.settings.musicApp));
+      }
+      if (!url) return;
+      if (phone) return { url };
+      await mac.openUrl(url);
+    },
     openUrl: (p: { url: string }) => (/^https:\/\/(myaccount\.google\.com|elevenlabs\.io|platform\.openai\.com|support\.google\.com)\//.test(String(p.url)) ? this.o.mac.openUrl(String(p.url)) : undefined),
     diagnose: () => this.diagnose(),
     downloadModel: (p: { id: string }) => void this.models.download(p.id),
