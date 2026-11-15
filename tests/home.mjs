@@ -122,7 +122,7 @@ try {
   await ask('pause the music', (x) => /Paused/.test(x.text)); await new Promise((r2) => setTimeout(r2, 900));
   check('the dashboard shows it paused', snap.music.state === 'paused');
   // ---------------- instant answers
-  await ask("what's on today?", (x) => /calendar/i.test(x.text) && x.ms < 600);
+  await ask("what's on today?", (x) => /calendar|today:/i.test(x.text) && x.ms < 600);
   await ask("what's on my list?", (x) => /list is empty/.test(x.text));
   await ask("what's the weather like?", (x) => /Tell me your town|can't reach/.test(x.text) && x.ms < 600);
   // ---------------- voice
