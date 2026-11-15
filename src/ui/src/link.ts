@@ -2,7 +2,10 @@
 import { useSyncExternalStore } from 'react';
 import type { Push, Snapshot, Timing, ToolUse } from '../../shared/types';
 
-export type Turn = { id: string; heard: string; text: string; tools: ToolUse[]; state: 'thinking' | 'speaking' | 'idle'; done: boolean; timing?: Timing };
+export type Turn = { id: string; heard: string; text: string; tools: ToolUse[]; state: 'thinking' | 'speaking' | 'idle'; done: boolean; timing?: Timing;
+  /** With the voice on: the part of the reply spoken so far, so words appear as they are said. Undefined shows the whole text. */
+  voiced?: string;
+};
 export type Mode = 'idle' | 'listening' | 'thinking' | 'speaking';
 export type Toast = { id: number; text: string; tone: 'info' | 'alert' };
 
@@ -33,6 +36,12 @@ export function useLink<T>(sel: (s: State) => T): T {
 export function useSnap<T>(sel: (s: Snapshot) => T): T {
   return useLink((s) => sel(s.snap!));
 }
+
+/** Will this reply be spoken? (Voice switched on, and a voice available to speak it.) */
+const willSpeak = (s: State): boolean => !!s.snap?.settings.speak && (/^(mac|eleven|openai):/.test(s.snap.settings.voice) || s.snap.status.voice !== 'missing');
+/** Set how much of the current reply has been spoken (undefined: show all of it). */
+export const setVoiced = (turnId: string, voiced: string | undefined): void =>
+  set((s) => (s.turn && s.turn.id === turnId && s.turn.voiced !== voiced ? { turn: { ...s.turn, voiced } } : {}));
 
 let toastId = 1;
 export const toast = (text: string, tone: Toast['tone'] = 'info'): void => {
@@ -123,12 +132,14 @@ export function connect(): void {
     if (p.type === 'patch') set((s) => (s.snap ? { snap: { ...s.snap, ...p.data } } : {}));
     else if (p.type === 'say') {
       set((s) => {
-        const cur: Turn = s.turn && s.turn.id === p.turn ? s.turn : { id: p.turn, heard: '', text: '', tools: [], state: 'thinking', done: false };
+        const cur: Turn = s.turn && s.turn.id === p.turn ? s.turn : { id: p.turn, heard: '', text: '', tools: [], state: 'thinking', done: false, voiced: willSpeak(s) ? '' : undefined };
         const turn: Turn = { ...cur, timing: p.timing ?? cur.timing, heard: p.heard ?? cur.heard, text: cur.text + (p.delta ?? ''), tools: p.tool ? [...cur.tools, p.tool] : cur.tools, state: p.state ?? cur.state, done: cur.done || !!p.done };
         // "Speaking" on screen is driven by the audio player when voice is on; text-only replies settle here.
-        const mode: Mode = p.done ? (s.mode === 'thinking' ? 'idle' : s.mode) : p.state === 'thinking' ? 'thinking' : s.mode === 'listening' ? s.mode : turn.text ? (s.mode === 'thinking' ? 'speaking' : s.mode) : s.mode;
+        const mode: Mode = turn.voiced !== undefined ? (p.state === 'thinking' && !p.done ? 'thinking' : s.mode) : p.done ? (s.mode === 'thinking' ? 'idle' : s.mode) : p.state === 'thinking' ? 'thinking' : s.mode === 'listening' ? s.mode : turn.text ? (s.mode === 'thinking' ? 'speaking' : s.mode) : s.mode;
         return { turn, mode };
       });
+      // If no sound ever arrives (a voice that failed), don't leave the reply hidden.
+      if (p.done) setTimeout(() => get().turn?.id === p.turn && get().turn?.voiced === '' && setVoiced(p.turn, undefined), 9000);
     } else if (p.type === 'notify') toast(`${p.title}: ${p.body}`, 'alert');
     pushHandlers.forEach((f) => f(p));
   };

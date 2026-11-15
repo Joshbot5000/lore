@@ -380,7 +380,7 @@ export function CoreCard({ compact }: { compact: boolean }) {
         {showing ? (
           <>
             {showing.heard && <p className="heard"><span className="label dim">you</span>{showing.heard}</p>}
-            <p className="said">{showing.text || <span className="dots"><i /><i /><i /></span>}{!showing.done && showing.text && <span className="caret" />}</p>
+            <p className="said">{(showing.voiced ?? showing.text) || <span className="dots"><i /><i /><i /></span>}{(!showing.done || showing.voiced !== undefined) && (showing.voiced ?? showing.text) && <span className="caret" />}</p>
             {!!showing.tools.length && <p className="tools">{showing.tools.map((t, i) => <span key={i} className={t.ok ? 'ok' : 'bad'}>{t.ok ? <Check size={11} strokeWidth={3} /> : <X size={11} />}{t.label}</span>)}</p>}
             {showing.timing && <p className="timing mono" title="How long each stage took">{[showing.timing.asr !== undefined && `heard ${(showing.timing.asr / 1000).toFixed(1)}s`, showing.timing.think !== undefined && `thought ${(showing.timing.think / 1000).toFixed(1)}s`, showing.timing.voice !== undefined && `voice ${(showing.timing.voice / 1000).toFixed(1)}s`].filter(Boolean).join(' · ')}</p>}
           </>

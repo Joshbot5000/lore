@@ -3,7 +3,7 @@
  * and play Jarvis's voice as it arrives, exposing a loudness level so the core can react.
  */
 import { Segmenter } from '../../shared/vad';
-import { call, get, onPush, set, toast } from './link';
+import { call, get, onPush, set, setVoiced, toast } from './link';
 
 let ctx: AudioContext | null = null; // playback
 let analyser: AnalyserNode | null = null;
@@ -56,7 +56,57 @@ function settle(): void {
 
 let decoding: Promise<void> = Promise.resolve();
 
-function playPcm(rate: number, b64: string, gap = 60): void {
+// ---- words appear on screen as they are spoken
+type Segment = { text: string; at: number; dur: number };
+let segments: Segment[] = [];
+let segTurn = '';
+let segFinal = false;
+let revealTimer = 0;
+
+function showAll(): void {
+  clearInterval(revealTimer);
+  revealTimer = 0;
+  if (segTurn) setVoiced(segTurn, undefined);
+  segments = [];
+  segTurn = '';
+  segFinal = false;
+}
+
+function reveal(): void {
+  const c = ctx;
+  if (!c || !segTurn) return;
+  const now = c.currentTime;
+  let out = '';
+  let finished = true;
+  for (const seg of segments) {
+    if (now >= seg.at + seg.dur) out += seg.text + ' ';
+    else {
+      finished = false;
+      if (now >= seg.at) {
+        // Up to the end of the word being said.
+        const upTo = Math.ceil(seg.text.length * ((now - seg.at) / seg.dur)) + 1;
+        const end = seg.text.indexOf(' ', upTo);
+        out += seg.text.slice(0, end < 0 ? seg.text.length : end);
+      }
+      break;
+    }
+  }
+  if (finished && segFinal) return showAll();
+  setVoiced(segTurn, out.trimEnd());
+}
+
+/** Note that this text starts being spoken at `at`, so the screen can follow the voice. */
+function follow(turn: string, text: string, at: number, clipSeconds: number): void {
+  if (get().turn?.id !== turn) return;
+  if (segTurn !== turn) (segments = []), (segTurn = turn), (segFinal = false);
+  // A streamed voice sends the words with its first sliver of sound: judge the length from the text then.
+  const pace = 15.5 * (get().snap?.settings.speed ?? 1);
+  const est = text.length / pace;
+  segments.push({ text, at, dur: clipSeconds < est * 0.6 ? est : clipSeconds });
+  if (!revealTimer) revealTimer = window.setInterval(reveal, 50);
+}
+
+function playPcm(rate: number, b64: string, gap = 60, turn = '', text = ''): void {
   const c = audio();
   const bin = atob(b64);
   const n = bin.length >> 1;
@@ -67,10 +117,10 @@ function playPcm(rate: number, b64: string, gap = 60): void {
   }
   const ab = c.createBuffer(1, n, rate);
   ab.getChannelData(0).set(f32);
-  playBuffer(ab, gap);
+  playBuffer(ab, gap, turn, text);
 }
 
-function playBuffer(ab: AudioBuffer, gap = 60): void {
+function playBuffer(ab: AudioBuffer, gap = 60, turn = '', text = ''): void {
   const c = audio();
   const src = c.createBufferSource();
   src.buffer = ab;
@@ -78,6 +128,7 @@ function playBuffer(ab: AudioBuffer, gap = 60): void {
   const at = Math.max(c.currentTime + 0.015, playHead);
   // The pause after this clip: a breath after a sentence, barely anything inside one.
   playHead = at + ab.duration + gap / 1000;
+  if (text) follow(turn, text, at, ab.duration);
   playing++;
   set({ mode: 'speaking' });
   src.onended = () => {
@@ -101,6 +152,7 @@ export function hush(): void {
   sources.clear();
   playing = 0;
   playHead = 0;
+  showAll();
   speechSynthesis?.cancel();
   if (get().mode === 'speaking') set({ mode: 'idle' });
 }
@@ -122,7 +174,7 @@ export function initVoice(): void {
       }
       if (p.wav) {
         const i = p.wav.indexOf(':');
-        const kind = p.wav.slice(0, i), data = p.wav.slice(i + 1), gap = p.gap, turn = p.turn;
+        const kind = p.wav.slice(0, i), data = p.wav.slice(i + 1), gap = p.gap, turn = p.turn, text = p.text;
         // Clips are decoded one after another so they always play in the order they were sent.
         decoding = decoding.then(async () => {
           if (turn !== lastTurn && !turn.startsWith('n')) return; // a newer reply has taken over
@@ -131,13 +183,21 @@ export function initVoice(): void {
               const bin = atob(data);
               const bytes = new Uint8Array(bin.length);
               for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-              playBuffer(await audio().decodeAudioData(bytes.buffer), gap);
+              playBuffer(await audio().decodeAudioData(bytes.buffer), gap, turn, text);
             } catch {
               /* an undecodable clip is skipped rather than stalling the rest */
             }
-          } else playPcm(+kind, data, gap);
+          } else playPcm(+kind, data, gap, turn, text);
         });
-      } else if (p.last) setTimeout(settle, 50);
+      } else if (p.last) {
+        const turn = p.turn;
+        // After everything queued before it: the reply is complete once the last word has been said.
+        decoding = decoding.then(() => {
+          if (segTurn === turn && segments.length) segFinal = true;
+          else setVoiced(turn, undefined); // nothing was spoken: just show the text
+          setTimeout(settle, 50);
+        });
+      }
     } else if (p.type === 'say' && p.done) {
       const s = get();
       // No neural voice installed yet: fall back to the device's built-in voice.

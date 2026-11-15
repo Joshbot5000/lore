@@ -146,7 +146,7 @@ try {
   const quiet = (b, from, step) => { let i = from, n = 0; while (i >= 0 && i < b.length - 1 && Math.abs(b.readInt16LE(i)) < 200) { i += step * 2; n++; } return n / 24000; };
   check('clips carry no padding silence', audio[0] && quiet(audio[0].pcm, 0, 1) < 0.06 && quiet(audio[0].pcm, audio[0].pcm.length - 2, -1) < 0.09, `lead ${quiet(audio[0].pcm, 0, 1).toFixed(2)} s, tail ${quiet(audio[0].pcm, audio[0].pcm.length - 2, -1).toFixed(2)} s`);
   audio.length = 0; const tb = Date.now(); await say('briefing'); await hush(22000);
-  check('a long reply is voiced as a few flowing passages with a breath between', audio.length >= 2 && audio.length <= 4 && audio.every((a) => a.gap === 260) && /\. \w/.test(audio[audio.length - 1].text), `${audio.length} clips (${audio.map((a) => a.secs.toFixed(1) + ' s').join(', ')}), first sound after ${audio[0]?.at - tb} ms, gaps ${[...new Set(audio.map((a) => a.gap))]}`);
+  check('a long reply is voiced as a few flowing passages with a breath between', audio.length >= 2 && audio.length <= 7 && audio.every((a) => [260, 100].includes(a.gap)) && audio[0].secs < 2.5, `${audio.length} clips (${audio.map((a) => a.secs.toFixed(1) + ' s').join(', ')}), first sound after ${audio[0]?.at - tb} ms, gaps ${[...new Set(audio.map((a) => a.gap))]}`);
   if (process.env.SHOTS) {
     const { chromium } = await import('playwright-core');
     const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium', args: ['--no-sandbox'] });
@@ -190,9 +190,9 @@ try {
   // ---------------- clicking through to the real thing
   await call('saveSettings', { useAppleMail: true }); await new Promise((r2) => setTimeout(r2, 1500));
   const withLink = snap.mail.find((m) => m.from === 'Dr Patel' && m.link);
-  await call('openItem', { kind: 'mail', id: withLink?.id }); await call('openItem', { kind: 'inbox' }); await call('openItem', { kind: 'event', id: 'e1' }); await call('openItem', { kind: 'calendar' }); await call('openItem', { kind: 'music' });
+  await call('openItem', { kind: 'mail', id: withLink?.id }); await call('openItem', { kind: 'inbox' }); const ev = snap.events.find((e) => e.source === 'apple'); await call('openItem', { kind: 'event', id: ev.id }); await call('openItem', { kind: 'calendar' }); await call('openItem', { kind: 'music' });
   const opened = (await call('opened')).result;
-  check('clicking an email, the inbox, an event and the song opens each one', opened.includes('message://%3Cabc%40uni.example%3E') && opened.includes('app:Mail') && opened.includes('event:e1') && opened.includes('app:Calendar') && opened.includes('spotify:track:4iV5W9uYEdYUVa79Axb7Rh'), opened.slice(-6).join(' | '));
+  check('clicking an email, the inbox, an event and the song opens each one', opened.includes('message://%3Cabc%40uni.example%3E') && opened.includes('app:Mail') && opened.includes(`event:${ev.id}`) && opened.includes('app:Calendar') && opened.includes('spotify:track:4iV5W9uYEdYUVa79Axb7Rh'), opened.slice(-6).join(' | '));
   const pws = new WebSocket(`ws://${url.host}/ws?k=${url.searchParams.get('k')}&d=phone`); await new Promise((r2) => pws.on('open', r2));
   const fromPhone = await new Promise((r2) => { pws.on('message', (raw) => { const m = JSON.parse(String(raw)); if (m.id === 1) r2(m.result); }); pws.send(JSON.stringify({ id: 1, method: 'openItem', params: { kind: 'music' } })); }); pws.close();
   check('on the phone, the song opens on the phone itself', fromPhone?.url === 'https://open.spotify.com/track/4iV5W9uYEdYUVa79Axb7Rh' && (await call('opened')).result.length === opened.length, JSON.stringify(fromPhone));

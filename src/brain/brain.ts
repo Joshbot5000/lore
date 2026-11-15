@@ -1612,14 +1612,24 @@ export class Brain extends EventEmitter {
    */
   private speakOut(turn: string, text: string, last = false): Promise<void> {
     const clean = speakable(text);
-    if (clean) this.waiting.set(turn, [...(this.waiting.get(turn) ?? []), clean]);
+    if (clean) {
+      const queued = this.waiting.get(turn) ?? [];
+      // The very first thing said should be short, so the voice starts almost at once: a long
+      // opening sentence is split at its first natural break.
+      const opening = !queued.length && !(this.speakSeq.get(turn) ?? 0) ? clean.match(/^(.{12,60}?[,;:—–.!?])\s+(\S[\s\S]{15,})$/) : null;
+      this.waiting.set(turn, opening ? [...queued, opening[1], opening[2]] : [...queued, clean]);
+    }
     if (last) this.finals.add(turn);
     this.speakChain = this.speakChain.then(async () => {
       const queue = this.waiting.get(turn) ?? [];
       const cloud = /^(eleven|openai):/.test(this.settings.voice);
       // A voice that cannot keep ahead of its own speech (a struggling machine) would stop after
       // every sentence. Better then to wait for the whole reply and say it in one unbroken go.
-      const slow = !cloud && this.voiceRate < 1.6 && !turn.startsWith('n') && !turn.startsWith('p');
+      const slow = !cloud && this.voiceRate < 1.15 && !turn.startsWith('n') && !turn.startsWith('p');
+      if (slow && !this.slowTold) {
+        this.slowTold = true;
+        this.push({ type: 'notify', title: 'The built-in voice is running slowly on this Mac', body: 'It cannot keep up with its own speech, so replies will start late. A cloud voice or one of your Mac\'s voices (Settings → Voice) will answer much faster.' });
+      }
       if (slow && !this.finals.has(turn)) return;
       do {
         const seq = this.speakSeq.get(turn) ?? 0;
@@ -1627,7 +1637,14 @@ export class Brain extends EventEmitter {
         // that, a passage may only be as long as the voice can produce before what is already
         // playing runs out; otherwise speech would stop dead while the next passage is made.
         const lead = Math.max(0, (this.playEnd - Date.now()) / 1000);
-        const limit = cloud ? 400 : slow ? 320 : seq === 0 ? 110 : Math.max(70, Math.min(320, Math.round(lead * this.voiceRate * 0.7 * 15)));
+        const limit = cloud ? 400 : slow ? 320 : seq === 0 ? 40 : Math.max(40, Math.min(320, Math.round(lead * this.voiceRate * 0.75 * 15)));
+        // A sentence too long to be made in time is cut at a natural break (or, failing that, between
+        // words): a barely audible join is far better than the voice stopping dead.
+        if (queue.length && queue[0].length > limit * 1.3 && !slow && !cloud) {
+          const head = queue[0].slice(0, Math.max(24, limit));
+          const at = Math.max(head.search(/[,;:—–][^,;:—–]*$/) + 1, 0) || head.lastIndexOf(' ');
+          if (at >= 16 && queue[0].length - at > 12) queue.splice(0, 1, queue[0].slice(0, at).trim(), queue[0].slice(at).trim());
+        }
         const take: string[] = [];
         while (queue.length && (!take.length || take.join(' ').length + queue[0].length < limit)) take.push(queue.shift()!);
         const passage = take.join(' ');
@@ -1649,6 +1666,7 @@ export class Brain extends EventEmitter {
   }
 
   private finals = new Set<string>();
+  private slowTold = false;
 
   /** Voice one passage and send it to every device. Cloud voices are played as they arrive. */
   private async speakPassage(turn: string, seq: number, passage: string, gap: number): Promise<void> {

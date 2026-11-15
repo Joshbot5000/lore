@@ -264,8 +264,8 @@ export function fakeMac(): MacBridge {
     }),
     calendar: async () => [
       { id: 'e1', title: 'Contract law seminar', start: day(0, 14), end: day(0, 15, 30), calendar: 'Uni', source: 'apple' },
-      { id: 'e2', title: 'Gym', start: day(1, 7, 30), end: day(1, 8, 30), calendar: 'Home' },
-      { id: 'e3', title: 'Dinner with family', start: day(2, 18, 45), end: day(2, 21), calendar: 'Home' },
+      { id: 'e2', title: 'Gym', start: day(1, 7, 30), end: day(1, 8, 30), calendar: 'Home', source: 'apple' },
+      { id: 'e3', title: 'Dinner with family', start: day(2, 18, 45), end: day(2, 21), calendar: 'Home', source: 'apple' },
     ],
     shortcuts: async () => ['Lounge lights', 'Movie night', 'Good night', 'Heating boost'],
     runShortcut: async () => undefined,

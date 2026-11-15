@@ -110,3 +110,11 @@ then tests/chat.mjs, tests/voice.mjs, tests/look.mjs against the printed address
         Mail; inbox; event -> Calendar `show`, or Google Calendar day; song -> spotify: address). Phones get a
         web address back and open it themselves.
       Tests: home.mjs 56, life.mjs 25, study.mjs 20, unit 38, shell ok. Real Mac still unverified.
+
+- [x] Round 8 (15 Nov): "massive delay from when the text is typed to when it is spoken". Text used to appear
+      at once while speech followed seconds later (reading is faster than speaking, plus synthesis time).
+      Now the words are revealed on screen as they are spoken (src/ui/src/voice.ts `follow`/`reveal`,
+      Turn.voiced in link.ts); the opening passage is cut to a clause so the built-in voice starts in well
+      under a second on the test box; over-long sentences are split to fit what the voice can make in time;
+      slow-voice mode only below 1.15x real time, with a one-off notice suggesting a faster voice.
+      Test: `node tests/sync.mjs` (real browser, real audio: 5 checks). Still no health-check data from his Mac.
